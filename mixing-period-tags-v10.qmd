@@ -1,0 +1,3138 @@
+---
+title: "Mixing-period tag recaptures in MULTIFAN-CL: a simulation study"
+subtitle: "Comparing `tag_flags(i,2)` settings against likelihood-based alternatives"
+# Pinned rather than `today`, so that a re-render does not silently re-date a
+# document other people may be citing. Bump this and the revision line in the
+# body together whenever the results change.
+date: "2026-08-05"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    embed-resources: true
+    fig-width: 8
+    fig-height: 4.5
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+    highlight-style: github
+execute:
+  warning: true
+  message: false
+---
+
+<!--
+MAINTENANCE NOTES
+
+Standing rule: every quoted number AND every asserted direction in the prose is
+an inline expression evaluated from a fitted object. Do not hard-code results
+into the text. Prose that has to describe a result one way if it holds and
+another way if it does not is written as a branching inline expression (see the
+verdict chunks in Experiment E) rather than as a sentence someone has to
+remember to update.
+
+Three sanctioned exceptions exist, all because the executive summary renders
+before the experiment that would supply the number:
+
+  * The count of conditions on the default's unbiasedness. Guarded, not
+    trusted: the tripwire chunk in Experiment E fails the render if the
+    hard-coded count and the fitted verdict ever disagree. Update
+    EXEC_CONDITIONS and the summary together.
+
+  * The magnitudes of the `flag1` bias quoted against $\psi$ ("half or more
+    by $\psi = 0.5$"). Guarded by the tripwire in the sufficiency chunk of
+    Experiment D, which fails the render if that mark is no longer cleared.
+    The same tripwire guards the ordering claim — that a longer mixing period
+    carries the worse bias at a given recapture fraction — which the summary
+    does not make but the results and guidance sections do. The summary's
+    magnitudes are deliberately loose; the precise figures live in Experiment
+    D and the checklist, where they are inline expressions.
+
+  * The claim that the median is uninformative about the small-sample tail
+    effect. Guarded by the same tripwire chunk in Experiment E, which fails
+    the render if the median at the smallest release-group size ever becomes
+    distinguishable from zero. If it trips, the summary needs the median
+    reported as a number rather than dismissed, and so do the results and
+    guidance sections.
+
+The summary's paragraph on `forward_X` quotes no figures and needs no guard,
+but it does need to stay in step with point 9 of the results section and with
+the prior-sweep item under Suggested extensions. If the prior sweep is ever run,
+all three change together: the claim that `forward_X` was the least precise
+estimator tested is the one most likely to be overturned by it.
+
+Two diagnostics exist to stop a number being an artefact of the machinery
+rather than a property of the estimator, and both should be kept:
+
+  * Search-interval contact. The one-dimensional flag modes are optimised over
+    a bounded interval, so `optimize()` always returns something and a
+    "convergence" flag is meaningless for them. `at_bound` records whether the
+    returned estimate is sitting on an endpoint. Any statistic sensitive to the
+    tail of the F-hat distribution must be checked against it, and Experiment E
+    additionally re-runs the whole design at a wider interval to show the
+    reported numbers do not move.
+
+  * Survival-floor engagement. The floor diagnostic calls the same `mix_step()`
+    as the estimator, so the two advance the tagged population identically. If
+    they were ever allowed to diverge, the floor frequency reported would not
+    be the floor frequency the estimator experienced.
+-->
+
+# Executive summary
+
+MULTIFAN-CL handles tag recaptures during the mixing period by inverting the
+observed returns rather than predicting them. `tag_flags(i,2)` selects the
+target: the default raises reported returns by the assumed reporting rate and
+removes that many tags; the alternative removes the reported returns at face
+value, which amounts to assuming complete reporting. Neither scores the
+mixing-period data in the likelihood, so under both settings those data fix the
+tagged population state with no uncertainty attached and no ability for the
+model to object. **Both treatments are wrong, and the choice cannot be avoided
+in any model that fits to tags.** This study simulates both, together with two
+likelihood-based alternatives, across reporting-rate misspecification,
+mixing-period length, tagged-fish availability during mixing, a realistic
+clumped reporting process, and release-group size.
+
+**The default is unbiased under three conditions and not otherwise: the
+assumed reporting rate is correct, the survival floor is not engaging, and
+release groups are large.** Given those, it recovers $F$ across every
+combination of mixing length and tagged-fish availability tested, which is a
+genuine strength — the deterministic inversion never needs to know how
+available tagged fish were during mixing. **The alternative is biased even when
+everything else is specified perfectly, but its bias is at least largely
+predictable.** It is governed by $\psi$, the proportion of each release group
+recaptured within `tag_flags(i,1)` periods of release: a few percent at
+$\psi = 0.05$, roughly a third of $F$ at $\psi = 0.3$, half or more by
+$\psi = 0.5$. That fraction is computable from the `.tag` file in advance,
+provided the reported returns are raised by the assumed reporting rate first.
+
+Where the default's conditions fail, the errors are consequential and hard to
+see. When the realised catch fraction in a mixing period exceeds roughly
+four-fifths of the assumed reporting rate, `posfun` silently caps the removal,
+the default then *under-removes*, and $F$ is biased downward and biomass upward
+— the same direction as the alternative it is supposed to improve on. At small
+release-group sizes the inversion's convexity puts weight in the upper tail of
+$F$ instead: a minority of groups return estimates many times the truth while
+the median at the same cell says nothing at all, so this second failure is
+invisible to the diagnostics an assessment normally reports. Nor do the two
+settings bound the problem between them. Because the assumed reporting rate is
+below one, the default always removes
+more tags and always returns the larger $F$, so the pair is structurally
+one-sided: it cannot contain the truth when the assumed rate is too high, and
+where it does contain it the interval is often wider than the quantity being
+estimated. Running both as grid levels spans an assumption without bounding
+anything. Note too that the assumed reporting rate is itself the first-order
+channel in most configurations examined — larger than the flag choice — so a
+biomass shift should not be attributed to the flag without knowing what the
+reporting rates did.
+
+**This matters now because reporting-rate estimates are moving downward.** The
+tag-seeding analysis prepared for the 2026 assessments (SC22-SA-IP-05) puts the
+purse seine reporting-rate priors for bigeye at means of 0.496 to 0.528 across
+regions 2 to 4, between 15 and 24 per cent below what the 2023 assessments
+would have used under the same region and fishery definitions. The survival-floor
+condition is reached routinely at an assumed rate of 0.2 and is reachable at 0.5
+when tagged fish are highly available during mixing, so the bigeye assessment
+sits at the boundary of the default's second condition rather than comfortably
+inside it, and it arrived there by moving in the direction that makes the
+condition harder to satisfy.
+
+**There is a treatment that removes the dilemma, and it is not available to the
+2026 assessments.** Predicting mixing-period returns and scoring them in the
+likelihood, with the reporting rate free to move against its tag-seeding prior,
+puts those data on the same footing as post-mixing returns and inverts nothing.
+This study implements that treatment (`forward_X`) alongside the two flag
+settings, and it recovers $F$ under the reporting-rate misspecification that
+biases both of them. MULTIFAN-CL cannot currently do this: the mixing-period
+returns do not enter the tag likelihood under either flag setting, so it is a
+redevelopment request to the MULTIFAN-CL team rather than a configuration
+choice. It is also not free. With many small release groups it was the least
+precise of the four estimators tested here — estimating the reporting rate, the
+availability multiplier and $F$ together needs information a fragmented tagging
+programme may not carry. That
+finding comes with a caveat: the prior imposed on the reporting rate in these
+runs is far looser than the tag-seeding priors an assessment would use, so an
+unknown share of the imprecision belongs to the prior rather than to the
+estimator, and the comparison should be re-run before the finding is leaned on.
+
+**In the meantime the most useful response is not to pick a setting but to
+bound how much the tag data are driving the answer at all.** We recommend that
+a configuration omitting tagging data — with the spatial information instead
+carried by a spatially implicit fleets-as-areas structure — be included in the
+structural uncertainty grid, and treated as a more informative addition to it
+than either flag setting. If it produces similar stock status, the
+mixing-period treatment is a second-order concern and can be documented as
+such; if it does not, the difference is attributable to a model component that
+is defective under either setting. It also answers a question managers ask
+directly: how much of this result depends on the tagging programme? Two of the
+default's three conditions — whether the survival floor is liable to engage,
+and whether release groups are large enough for the large-sample argument to
+apply — can be checked in advance against the `.tag` file and the flag
+settings, and
+[What to check in an assessment that fits to tags] sets out how. The third, the
+correctness of the assumed reporting rate, is the quantity under dispute and
+cannot be settled from inside the model.
+
+> **A note on scope.** The tag-free, spatially implicit fleets-as-areas
+> recommendation is a reasoned position, not a simulated result — nothing here
+> tests a spatial model or a fleets-as-areas configuration. What the simulation
+> supports is the narrower claim that both `tag_flags(i,2)` settings are biased,
+> that their biases are not bounding, and that the conditions under which each
+> fails are identifiable in advance.
+
+# Scope and methods
+
+## Purpose
+
+MULTIFAN-CL handles tag recaptures differently before and after the mixing period.
+
+**After mixing**, the tagged population is projected forward with the population
+fishing mortality, predicted returns are formed as $E[R] = X \times C$ (reporting
+rate times true recaptures), and observed returns are scored in the likelihood.
+Nothing is inverted.
+
+**During mixing**, `do_newton_raphson_for_tags()` instead solves deterministically
+for a tag-specific $F$ such that the removal equals a target derived from the
+observed returns. The flag `tag_flags(i,2)` chooses the target:
+
+| Setting | Target removal | Interpretation |
+|---|---|---|
+| `tag_flags(i,2) = 0` (default) | $R_{obs} / X$ | reported returns raised for non-reporting |
+| `tag_flags(i,2) = 1` | $R_{obs}$ | reported returns taken at face value |
+
+Mixing-period returns contribute **nothing** to the likelihood under either
+setting. They have full authority over the tagged population state and zero
+influence on parameter estimation, with no uncertainty attached.
+
+This vignette runs five experiments.
+
+**Experiment A** holds the *assumed* reporting rate fixed at 0.5 — the value the
+analyst supplies, whether from tag seeding or by assumption — and varies the
+*true* reporting rate above, at, and below it. That is the realistic framing: you
+choose what you assume, and the error runs in a direction you cannot see.
+
+**Experiment B** adds two further dimensions that the assessment configuration
+controls directly: the length of the mixing period, `tag_flags(i,1)`, at 2, 3
+and 4 quarters; and the relative availability of tagged fish during mixing,
+including the case where tagged fish are *more* vulnerable than the general
+population rather than less. The latter is arguably the more realistic case for
+purse-seine fisheries, where tags are released from fishing vessels into
+concentrated effort.
+
+**Experiment C** replaces the clean observation model with a realistic one:
+small release groups, stochastic recaptures, and reporting clumped at the trip
+level. This is what makes the survival-floor failure mode reachable at ordinary
+fishing mortalities, and it identifies the assumed reporting rate as the
+parameter that controls it.
+
+**Experiment D** reparameterises the `flag1` result by the fraction of a release
+group recaptured during mixing, which turns the bias into something an analyst
+can look up from their own `.tag` file.
+
+**Experiment E** isolates release-group size, to test whether the residual
+scatter `flag0` shows at high recapture fractions in Experiment D is Monte Carlo
+noise or a real small-sample property of inverting a noisy target.
+
+The operating model is deliberately stripped down: one fishery, one region, no
+age structure, no movement, no tag shedding beyond natural mortality.
+Experiments A and B use a single large release cohort; C and D use several
+smaller groups sharing one fishing mortality; E uses a single group of varying
+size, for the reason given in that section. It is not a fisheries model. It
+isolates the mixing-period mechanism and nothing else.
+
+## Setup
+
+```{r}
+#| label: setup
+#| warning: false
+library(data.table)
+library(magrittr)
+library(ggplot2)
+
+theme_set(theme_bw(base_size = 11))
+set.seed(20260802)
+
+pal <- c(flag0     = "#D85A30",
+         flag1     = "#1D9E75",
+         forward   = "#7F77DD",
+         forward_X = "#378ADD",
+         truth     = "grey30")
+
+# Threshold defining a "gross overshoot" of the deterministic inversion, as a
+# multiple of the true F. Used as the primary tail statistic in Experiment E.
+# It has to sit far enough above the truth to be unambiguous, far enough below
+# the search ceiling to be insensitive to it (the ceilings are at roughly 33x
+# and 333x the truth), and low enough to capture sufficient mass for the
+# difference across group sizes to be resolvable at the replicate count used.
+E_TAIL_MULT <- 5
+```
+
+Formatting helpers. Every number quoted in the prose below is produced by one of
+these from a fitted object, so the text cannot drift out of step with the results
+when the design or the replicate count changes.
+
+```{r}
+#| label: fmt-helpers
+
+# Percentage, signed by default (biases read better with an explicit sign).
+fpc <- function(x, digits = 0, signed = TRUE) {
+  sprintf(paste0("%", if (signed) "+" else "", ".", digits, "f%%"), 100 * x)
+}
+
+# Range of a vector, as a percentage: "-41% to +16%". If both ends format
+# identically -- which happens whenever a quantity is constant across the cells
+# being summarised -- collapse to the single value, so the prose reads "0%"
+# rather than the nonsensical "0% to 0%".
+fpc_range <- function(x, digits = 0) {
+  lo <- fpc(min(x), digits)
+  hi <- fpc(max(x), digits)
+  if (identical(lo, hi)) lo else paste0(lo, " to ", hi)
+}
+
+fnum <- function(x, digits = 2) formatC(x, format = "f", digits = digits)
+
+# Range of values already expressed in percentage points: "17-67%". Collapses to
+# a single value when both ends round alike, so a quantity that is constant
+# across the cells being summarised does not read as the nonsensical "0-0%".
+fpp_range <- function(x, digits = 0) {
+  lo <- fnum(min(x), digits)
+  hi <- fnum(max(x), digits)
+  if (identical(lo, hi)) paste0(lo, "%") else paste0(lo, "\u2013", hi, "%")
+}
+
+# Monte Carlo standard error of a sample median (normal approximation).
+mcse_median <- function(x) 1.2533 * stats::sd(x) / sqrt(length(x))
+```
+
+## Operating model
+
+Discrete quarterly steps. Within a period, tagged fish die from fishing and
+natural causes following Baranov:
+
+$$C_t = \frac{F^T_t}{Z_t}\left(1 - e^{-Z_t}\right) N_t, \qquad
+  N_{t+1} = N_t\, e^{-Z_t}, \qquad Z_t = F^T_t + M$$
+
+During the mixing period, tagged fish have a different availability to the
+fishery than the general population, so $F^T_t = \varphi F_t$; afterwards
+$\varphi = 1$. Values $\varphi < 1$ mean tagged fish are harder to catch than
+average (the assumption implicit in the usual justification for a mixing
+period); $\varphi > 1$ means they are easier to catch, which is what happens
+when effort is concentrated around release sites. Reported returns are a thinned
+observation of the true recaptures, $R_t \sim \text{Poisson}(X_{true}\, C_t)$.
+
+```{r}
+#| label: om-functions
+baranov <- function(f, n, m) {
+  z <- f + m
+  (f / z) * (1 - exp(-z)) * n
+}
+
+om <- list(
+  N0        = 10000,  # tags released (known exactly)
+  Tmax      = 12,     # quarters at liberty
+  M         = 0.20,   # natural mortality per quarter
+  F_true    = 0.15,   # post-mixing fishing mortality per quarter -- the estimand
+  X_assumed = 0.50,   # the reporting rate the analyst supplies -- fixed in every
+                      # experiment except C, which varies it deliberately. The
+                      # value is the 2026 bigeye purse seine prior mean (see below).
+  nmix      = 2,      # baseline mixing periods, i.e. tag_flags(i,1)
+  phi       = 0.50    # baseline availability multiplier during mixing
+)
+
+simulate_returns <- function(p, X_true, phi = p$phi, nmix = p$nmix) {
+  n <- p$N0
+  r <- numeric(p$Tmax)
+  for (t in seq_len(p$Tmax)) {
+    f_t  <- p$F_true * if (t <= nmix) phi else 1
+    r[t] <- rpois(1, X_true * baranov(f_t, n, p$M))
+    n    <- n * exp(-(f_t + p$M))
+  }
+  r
+}
+```
+
+The assumed reporting rate of 0.50 is not a round number chosen for
+convenience. The tag-seeding analysis prepared for the 2026 assessments
+(SC22-SA-IP-05) gives purse seine reporting-rate priors for bigeye with means of
+0.496 in region 2, 0.512 in region 3 and 0.528 in region 4, so 0.50 is the
+operative value for the assessment this work is aimed at and the panels at
+$X_{assumed} = 0.5$ elsewhere in this document are the ones to read first.
+Three qualifications travel with that number and are repeated wherever it is
+used: those are purse seine fisheries only, so the mapping onto a
+single-fishery operating model is by analogy; they are penalty distributions
+rather than fixed values, so a real model estimates the rate against them
+rather than dividing by a constant; and the region 2 penalty was deliberately
+halved to reflect additional uncertainty, with the prior not recommended for
+the Indonesian and Philippine domestic fisheries at all.
+
+## The mixing-period step
+
+One function performs the deterministic inversion, and every estimator, every
+trajectory plot and every diagnostic in this document calls it. This is load-bearing
+rather than tidiness. If the estimator capped the removal one way — say a hard
+`min(target, 0.99 * n)` — and the floor diagnostic used an ADMB-style survival
+floor, the two would advance the tagged population differently as soon as the cap
+engaged, and the frequency of floor engagement reported would not be the frequency
+the estimator actually experienced. A single implementation makes that class of
+discrepancy impossible by construction.
+
+The floor reproduces the MULTIFAN-CL behaviour qualitatively: survival is not
+allowed below `cut + fringe`, the removal is rescaled to whatever the floored
+survival implies, and a quadratic penalty is accumulated. The defaults match
+`age_flags(118)` and `(119)`.
+
+```{r}
+#| label: mix-step
+
+CUT    <- 0.20   # age_flags(118) analogue
+FRINGE <- 0.02   # age_flags(119) analogue -- survival floor is CUT + FRINGE
+PENWT  <- 1e3    # penalty weight; see note below and the Limitations
+
+# ADMB posfun: smooth floor with a quadratic penalty.
+posfun <- function(x, eps) {
+  if (x >= eps) return(c(y = x, pen = 0))
+  c(y = eps / (2 - x / eps), pen = (x - eps)^2)
+}
+
+# Newton solver for the tag F. Mirrors do_newton_raphson_for_tags() and is
+# faster than uniroot().
+solve_F_newton <- function(target, n, m, iter = 25) {
+  if (target <= 0) return(0)
+  u <- min(target / n, 0.999)
+  f <- -log(1 - u)                       # exponential-approximation start
+  for (i in seq_len(iter)) {
+    z  <- f + m
+    e  <- exp(-z)
+    g  <- (f / z) * (1 - e) * n - target
+    dg <- n * ((m * (1 - e)) / z^2 + (f / z) * e)
+    f  <- max(f - g / dg, 1e-10)
+  }
+  f
+}
+
+# THE single mixing-period step. Returns the realised target, the F that
+# achieves it, the penalty incurred, and whether the survival floor engaged.
+mix_step <- function(r_t, n, p, mode, cut = CUT, fringe = FRINGE) {
+  target  <- if (mode == "flag0") r_t / p$X_assumed else r_t
+  surv    <- 1 - target / n
+  floored <- surv < cut + fringe
+  pen     <- 0
+  if (floored) {
+    pf     <- posfun(surv - fringe, cut)
+    surv   <- fringe + pf[["y"]]
+    pen    <- pf[["pen"]]
+    target <- n * (1 - surv)
+  }
+  list(target = target, f = solve_F_newton(target, n, p$M),
+       pen = pen, floored = floored)
+}
+```
+
+Note that for `flag0` and `flag1` the target depends only on the data, never on
+a parameter, so the penalty is a constant with respect to the parameter vector
+and cannot move $\hat{F}$. This is not a shortcut: it is a faithful analogue of
+the `age_flags(117) < 0` case, in which the rescaling happens with no trace in
+the objective function. It does mean the penalty in this vignette is a
+bookkeeping device rather than something the optimiser responds to.
+
+## The estimators
+
+All estimate $F$ on the log scale. They differ only in how the mixing periods are
+handled. Every one uses `X_assumed = 0.5`; none is told the true reporting rate,
+and none is told $\varphi$.
+
+| Label | Mixing-period removal | Mixing returns in likelihood? | Free parameters |
+|---|---|---|---|
+| `flag0` | $R_t / X_{assumed}$, solved deterministically | no | $\log F$ |
+| `flag1` | $R_t$, solved deterministically | no | $\log F$ |
+| `forward` | predicted from $\varphi F$ | yes | $\log F$, $\log \varphi$ |
+| `forward_X` | predicted from $\varphi F$ | yes | $\log F$, $\log \varphi$, $\text{logit}\,X$ |
+
+`forward_X` additionally estimates the reporting rate under a lognormal prior
+centred on the assumed value — the analogue of a tag-seeding prior via
+`fish_flags(i,35)` and `(i,36)`.
+
+`flag0` and `flag1` never estimate $\varphi$; they do not need to, because they
+solve for whatever mixing-period $F$ reproduces their target removal. Whether
+that makes them robust to $\varphi$ or merely indifferent to it is one of the
+questions Experiment B answers.
+
+Because the flag modes have a single free parameter, they are optimised with
+`optimize()` rather than being handed a three-element simplex with two exactly
+flat directions. This is both faster and more reliable than handing them to a
+general-purpose optimiser.
+
+```{r}
+#| label: estimators
+nll_tag <- function(par, r, p, mode, nmix = p$nmix, prior_sd = 0.4) {
+  f_pop <- exp(par[1])
+  phi   <- if (mode %in% c("forward", "forward_X")) exp(par[2]) else 1
+  x     <- if (mode == "forward_X") plogis(par[3]) else p$X_assumed
+
+  n   <- p$N0
+  nll <- 0
+
+  for (t in seq_len(p$Tmax)) {
+    premix <- t <= nmix
+
+    if (premix && mode %in% c("flag0", "flag1")) {
+      # Deterministic inversion. No likelihood contribution; the penalty is
+      # constant in `par` (see note above).
+      st  <- mix_step(r[t], n, p, mode)
+      f_t <- st$f
+      nll <- nll + PENWT * st$pen
+    } else {
+      # Forward prediction, scored against the data.
+      f_t <- if (premix) f_pop * phi else f_pop
+      mu  <- x * baranov(f_t, n, p$M) + 1e-10
+      nll <- nll - dpois(r[t], mu, log = TRUE)
+    }
+    n <- n * exp(-(f_t + p$M))
+  }
+
+  if (mode == "forward_X") {
+    nll <- nll + 0.5 * ((log(x) - log(p$X_assumed)) / prior_sd)^2
+  }
+  nll
+}
+
+LOGF_INT      <- c(log(1e-3), log(5))    # search interval for the 1-D flag modes
+LOGF_INT_WIDE <- c(log(1e-5), log(50))   # stress interval, used in Experiment E
+BOUND_TOL     <- 1e-3                    # log-scale tolerance for endpoint contact
+
+# The flag modes are optimised over a bounded interval, so `optimize()` always
+# returns a value and a convergence code would be meaningless for them. The
+# meaningful diagnostic is whether the returned estimate is sitting on an
+# endpoint: if it is, the number reported is a property of the search interval
+# rather than of the data, and any statistic sensitive to the tail of the F-hat
+# distribution has to be checked against it. Replicates that hit a bound are
+# retained in every summary below, not dropped -- discarding them would remove
+# exactly the behaviour being characterised -- but they are counted and reported.
+at_bound_lf <- function(lf, interval, tol = BOUND_TOL) {
+  any(abs(lf - interval) < tol)
+}
+
+fit_one <- function(r, p, mode, nmix = p$nmix, interval = LOGF_INT) {
+  mode <- as.character(mode)[1L]
+
+  if (mode %in% c("flag0", "flag1")) {
+    opt <- stats::optimize(
+      function(lf) nll_tag(c(lf, 0, 0), r, p, mode, nmix),
+      interval = interval, tol = 1e-10)
+    return(data.table(F_hat = exp(opt$minimum), phi_hat = NA_real_,
+                      X_hat = p$X_assumed, conv = 0L,
+                      at_bound = at_bound_lf(opt$minimum, interval)))
+  }
+
+  opt <- stats::optim(
+    par = c(log(0.10), 0, qlogis(p$X_assumed)),
+    fn = function(par) nll_tag(par, r, p, mode, nmix),
+    method = "Nelder-Mead",
+    control = list(maxit = 5000, reltol = 1e-12))
+
+  data.table(
+    F_hat    = exp(opt$par[1]),
+    phi_hat  = exp(opt$par[2]),
+    X_hat    = if (mode == "forward_X") plogis(opt$par[3]) else p$X_assumed,
+    conv     = opt$convergence,
+    at_bound = FALSE)   # unbounded search; `conv` is the diagnostic here
+}
+```
+
+A note on what the flag modes can and cannot return. The deterministic inversion
+solves for whatever mixing-period $F$ reproduces its target removal, and that
+target is a *noisy observation* divided by a fixed constant. When a small release
+group happens to return an unusually large number of tags in a mixing period, the
+implied removal can approach the tags available, and the solved $F$ can be
+arbitrarily large. The search interval is what stops it running away. That makes
+the upper endpoint a modelling choice with consequences for any mean, and it is
+why `at_bound` is carried through every experiment and why Experiment E repeats
+its design at `LOGF_INT_WIDE` as well.
+
+# Experiment A: reporting-rate misspecification
+
+The assumed reporting rate is fixed at 0.5. The true rate takes three values, so
+the assumption is right in one case and wrong in each direction in the others.
+Mixing length and availability stay at their baseline (`nmix = 2`,
+$\varphi = 0.5$).
+
+```{r}
+#| label: scenarios-a
+scenarios <- data.table(
+  X_true = c(0.35, 0.50, 0.65),
+  case   = factor(c("true < assumed", "true = assumed", "true > assumed"),
+                  levels = c("true < assumed", "true = assumed", "true > assumed"))
+)
+```
+
+## Mechanism: what happens to the tagged population
+
+Before looking at estimates, look at the state. This traces tags at liberty
+through the mixing period under each treatment, for one realisation per
+scenario, with $F$ held at its true value. Plotting the ratio to the true
+trajectory rather than the trajectory itself is what makes the mechanism visible:
+on an absolute axis, over an order-of-magnitude decline, the three series are
+indistinguishable.
+
+```{r}
+#| label: mechanism
+#| fig-height: 4
+#| fig-cap: "Tags at liberty under each mixing-period treatment, relative to the truth. All divergence is created within the first two quarters (dashed line) and is then carried, unchanged, through the rest of the series. flag1 always sits above flag0 because it never raises the returns."
+trajectory <- function(r, p, treatment, phi = p$phi, nmix = p$nmix) {
+  n   <- p$N0
+  out <- numeric(p$Tmax + 1)
+  out[1] <- n
+  for (t in seq_len(p$Tmax)) {
+    premix <- t <= nmix
+    if (premix && treatment %in% c("flag0", "flag1")) {
+      f_t <- mix_step(r[t], n, p, treatment)$f
+    } else {
+      f_t <- p$F_true * if (premix) phi else 1   # "truth"
+    }
+    n <- n * exp(-(f_t + p$M))
+    out[t + 1] <- n
+  }
+  data.table(period = 0:p$Tmax, N = out, treatment = treatment)
+}
+
+set.seed(11)
+traj <- scenarios[, {
+  r <- simulate_returns(om, X_true)
+  c("truth", "flag0", "flag1") %>%
+    lapply(trajectory, r = r, p = om) %>%
+    rbindlist()
+}, by = .(case, X_true)]
+
+traj[, treatment := factor(treatment, levels = c("truth", "flag0", "flag1"))]
+
+# Express each treatment relative to the truth within (case, period).
+traj[, N_rel := N / N[treatment == "truth"], by = .(case, period)]
+
+ggplot(traj[treatment != "truth"], aes(period, N_rel, colour = treatment)) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "grey40") +
+  geom_vline(xintercept = om$nmix, linetype = 2, colour = "grey60") +
+  geom_line(linewidth = 0.9) +
+  facet_wrap(~ case) +
+  scale_x_continuous(breaks = seq(0, om$Tmax, by = 3)) +
+  scale_colour_manual(values = pal) +
+  labs(x = "Quarters at liberty", y = "Tags at liberty / truth", colour = NULL,
+       subtitle = paste0("Assumed reporting rate = ", om$X_assumed,
+                         " in all panels; only the truth changes"))
+```
+
+When the true reporting rate is *below* what we assume, observed returns are
+sparse relative to the true recaptures, and `flag0` divides by too large a number
+— it under-removes, so the ratio sits above 1. When the truth is *above* what we
+assume, `flag0` over-removes. `flag1` never raises the returns at all, so it
+always removes the fewest tags and carries the largest cohort into the
+informative periods. The flat sections after quarter 2 are the point: the error
+is created entirely within the mixing period and is then locked in.
+
+## Simulation
+
+```{r}
+#| label: experiment-a
+n_rep <- 200
+modes <- c("flag0", "flag1", "forward", "forward_X")
+
+grid_a <- CJ(rep = seq_len(n_rep), case = scenarios$case, mode = modes,
+             sorted = FALSE) %>%
+  merge(scenarios, by = "case")
+
+res_a <- grid_a[, {
+  # One dataset per (rep, case), shared across estimators via a fixed seed,
+  # so the four fits are paired and directly comparable.
+  set.seed(as.integer(1e6 * X_true) + rep)
+  r <- simulate_returns(om, X_true)
+  fit_one(r, om, mode = mode)
+}, by = .(rep, case, X_true, mode)]
+
+res_a[, `:=`(mode     = factor(mode, levels = modes),
+             rel_bias = F_hat / om$F_true - 1)]
+```
+
+```{r}
+#| label: conv-a
+# Counts flagged fits, not just non-convergent ones: for the bounded 1-D modes
+# `conv` is 0 by construction, so a table of `conv != 0` alone would report
+# zeros whatever the estimator did.
+knitr::kable(
+  dcast(res_a[, .(flagged = sum(conv != 0 | at_bound)), by = .(case, mode)],
+        case ~ mode, value.var = "flagged"),
+  caption = paste0("Experiment A: fits that either failed to converge or ",
+                   "returned an estimate on the edge of the search interval, ",
+                   "out of ", n_rep, " per cell."))
+```
+
+### Bias in estimated fishing mortality
+
+```{r}
+#| label: bias-a
+summ_a <- res_a[conv == 0, .(
+  median_F = median(F_hat),
+  rel_bias = median(F_hat) / om$F_true - 1,
+  mcse     = mcse_median(F_hat) / om$F_true
+), by = .(case, X_true, mode)][order(X_true, mode)]
+
+knitr::kable(summ_a, digits = 3,
+             col.names = c("Case", "True RR", "Estimator",
+                           "Median F-hat", "Relative bias", "MCSE"))
+```
+
+```{r}
+#| label: bias-plot-a
+#| fig-cap: "Relative bias in estimated F with the assumed reporting rate fixed at 0.5. flag0 and flag1 sit on the same side of zero in every panel."
+ggplot(res_a[conv == 0], aes(mode, rel_bias, fill = mode)) +
+  geom_hline(yintercept = 0, linetype = 2, colour = "grey40") +
+  geom_boxplot(outlier.size = 0.6, alpha = 0.85, show.legend = FALSE) +
+  facet_wrap(~ case) +
+  scale_x_discrete(guide = guide_axis(angle = 30)) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = pal) +
+  labs(x = NULL, y = "Relative bias in F-hat")
+```
+
+### Do the flag settings bracket the truth?
+
+```{r}
+#| label: bracket-a
+bracket_check <- function(dt, f_true) {
+  id   <- setdiff(names(dt), c("mode", "F_hat", "conv"))
+  keep <- dt[mode %in% c("flag0", "flag1")]
+
+  # Keep only replicates where BOTH flag modes converged. Filtering per mode
+  # and then reshaping silently produces NA and poisons the cell mean.
+  ok   <- keep[, .(both = all(conv == 0) & .N == 2L), by = id][both == TRUE]
+  keep <- merge(keep, ok[, ..id], by = id)
+
+  w <- dcast(keep, stats::as.formula(paste(paste(id, collapse = " + "), "~ mode")),
+             value.var = "F_hat")
+  w[, `:=`(lo = pmin(flag0, flag1), hi = pmax(flag0, flag1))]
+  w[, brackets := f_true >= lo & f_true <= hi]
+  stopifnot(!anyNA(w$brackets))
+  w[]
+}
+
+wide_a <- bracket_check(res_a[, .(rep, case, X_true, mode, F_hat, conv)], om$F_true)
+
+knitr::kable(
+  wide_a[, .(`flag1 (median)` = median(flag1),
+             `flag0 (median)` = median(flag0),
+             `true F`         = om$F_true,
+             `% bracketing`   = 100 * mean(brackets)),
+         by = .(case, X_true)][order(X_true)],
+  digits = 3)
+```
+
+```{r}
+#| label: bracket-plot-a
+#| fig-height: 3.4
+#| fig-cap: "Interval spanned by the two flag settings, first 60 replicates. Dashed line is the true F."
+ggplot(wide_a[rep <= 60], aes(x = rep)) +
+  geom_linerange(aes(ymin = lo, ymax = hi), colour = "grey55", linewidth = 0.5) +
+  geom_point(aes(y = flag0, colour = "flag0"), size = 0.9) +
+  geom_point(aes(y = flag1, colour = "flag1"), size = 0.9) +
+  geom_hline(yintercept = om$F_true, linetype = 2) +
+  facet_wrap(~ case) +
+  scale_colour_manual(values = pal) +
+  labs(x = "Replicate", y = expression(hat(F)), colour = NULL)
+```
+
+```{r}
+#| label: bracket-a-inline
+#| include: false
+brk_a_eq <- wide_a[case == "true = assumed", 100 * mean(brackets)]
+brk_a_mis <- wide_a[case != "true = assumed", 100 * mean(brackets)]
+```
+
+At the baseline configuration the two settings sit on the same side of the truth
+in both misspecified cases (`r fnum(brk_a_mis, 1)`% bracketing). `flag1` is
+uniformly the *lower* of the two, so the pair spans an interval — but that
+interval lies wholly above or wholly below the truth. Note that being the lower
+endpoint is not the same as being the closer one: in the `true < assumed` case
+`flag1` is further from the truth than `flag0`, not less extreme.
+
+The one case with non-zero bracketing is the case where the reporting rate is
+assumed *correctly*, at `r fnum(brk_a_eq, 1)`%. That is worth reading carefully,
+because it is not evidence that the pair works. When $X$ is right, `flag0` is
+unbiased, so it sits on the truth and Monte Carlo noise puts it above the truth
+roughly half the time. The "bracket" is really just `flag0` landing on the
+answer, with `flag1` some distance below it. A construct that only contains the
+truth when one of its two endpoints is already unbiased is not bounding anything.
+
+Experiment B shows why the asymmetry between the two misspecified cases is
+structural rather than incidental.
+
+# Experiment B: mixing length and mixing-period availability
+
+Two things the assessment configuration controls directly are added to the
+design:
+
+- **Mixing length** `nmix` $\in \{2,3,4\}$ quarters — this is `tag_flags(i,1)`,
+  chosen by the analyst.
+- **Availability during mixing** $\varphi \in \{0.5, 1.0, 2.0\}$ — tagged fish
+  half as catchable as average, equally catchable, or twice as catchable. The
+  last case represents concentrated effort around release sites and is *not*
+  exotic for purse-seine tagging.
+
+These are crossed with the same three reporting-rate scenarios, giving 27 cells.
+Note that $\varphi$ is a property of the world, not a setting: no estimator is
+told its value, and only the forward parameterisations even have a parameter for
+it.
+
+Runtime note: this design is 3 x 3 x 3 x 4 x `n_rep_b` model fits. Half of those
+are one-dimensional and cheap; the forward modes are the cost. Expect a
+few minutes. Drop `n_rep_b` to 20 for a quick pass; the medians get noisier —
+watch the MCSE column — but the patterns hold.
+
+```{r}
+#| label: experiment-b
+n_rep_b <- 60          # raise for smoother medians; runtime scales linearly
+
+design_b <- CJ(nmix   = c(2L, 3L, 4L),
+               phi    = c(0.5, 1.0, 2.0),
+               X_true = scenarios$X_true,
+               mode   = modes,
+               rep    = seq_len(n_rep_b), sorted = FALSE) %>%
+  merge(scenarios, by = "X_true")
+
+# Seed from a group index rather than an arithmetic combination of the factor
+# levels, which is collision-prone as soon as a level or the replicate count
+# changes.
+design_b[, cell := .GRP, by = .(nmix, phi, X_true)]
+
+res_b <- design_b[, {
+  set.seed(1000L * cell + rep)
+  r <- simulate_returns(om, X_true, phi = phi, nmix = nmix)
+  fit_one(r, om, mode = mode, nmix = nmix)
+}, by = .(rep, cell, nmix, phi, X_true, case, mode)]
+
+res_b[, `:=`(mode     = factor(mode, levels = modes),
+             rel_bias = F_hat / om$F_true - 1)]
+```
+
+```{r}
+#| label: conv-b
+knitr::kable(
+  dcast(res_b[, .(flagged = sum(conv != 0 | at_bound)), by = .(case, mode)],
+        case ~ mode, value.var = "flagged"),
+  caption = paste0("Experiment B: fits that either failed to converge or ",
+                   "returned an estimate on the edge of the search interval, ",
+                   "out of ", n_rep_b * 9, " per (case, estimator)."))
+```
+
+## Bias across the design
+
+```{r}
+#| label: bias-b
+#| fig-height: 6
+#| fig-cap: "Median relative bias in F. Rows are the availability multiplier during mixing; columns are the reporting-rate scenario. In the middle column, where the reporting rate is correct, flag0 sits on zero in every cell; flag1 degrades steeply as either phi or nmix increases."
+summ_b <- res_b[conv == 0, .(rel_bias = median(F_hat) / om$F_true - 1,
+                             mcse     = mcse_median(F_hat) / om$F_true,
+                             n        = .N),
+                by = .(nmix, phi, case, mode)]
+
+ggplot(summ_b, aes(factor(nmix), rel_bias, colour = mode, group = mode)) +
+  geom_hline(yintercept = 0, linetype = 2, colour = "grey40") +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 1.8) +
+  facet_grid(phi ~ case,
+             labeller = labeller(phi = function(x) paste0("phi = ", x))) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_colour_manual(values = pal) +
+  labs(x = "Mixing periods (nmix)", y = "Median relative bias in F-hat",
+       colour = NULL)
+```
+
+```{r}
+#| label: bias-b-table
+knitr::kable(
+  dcast(summ_b, nmix + phi + case ~ mode, value.var = "rel_bias"),
+  digits = 3,
+  caption = "Median relative bias in F-hat across the full design.")
+
+knitr::kable(
+  dcast(summ_b, nmix + phi + case ~ mode, value.var = "mcse"),
+  digits = 3,
+  caption = paste0(
+    "Monte Carlo standard error of the medians above. Differences ",
+    "smaller than about twice these values should not be interpreted."))
+```
+
+```{r}
+#| label: floor-b
+#| include: false
+# Did the survival floor engage anywhere in the main design? This uses the same
+# mix_step() as the estimator, so it reports the floor frequency the estimator
+# actually experienced rather than one produced by a separate cap.
+floor_check_one <- function(r, p, nmix) {
+  n <- p$N0; hits <- 0L
+  for (t in seq_len(nmix)) {
+    st <- mix_step(r[t], n, p, "flag0")
+    if (st$floored) hits <- hits + 1L
+    n <- n * exp(-(st$f + p$M))
+  }
+  hits
+}
+
+floor_b <- design_b[mode == "flag0", {
+  set.seed(1000L * cell + rep)
+  r <- simulate_returns(om, X_true, phi = phi, nmix = nmix)
+  .(hits = floor_check_one(r, om, nmix))
+}, by = .(rep, cell, nmix, phi, case)]
+
+floor_b_any <- floor_b[, 100 * mean(hits > 0)]
+```
+
+The survival floor engages in `r fnum(floor_b_any, 1)`% of replicates across the
+27-cell design.
+`r if (floor_b_any < 1) "The Experiment B results can therefore be read as the floor-free case throughout, and Experiment C is where the floor becomes the story. Establishing this matters for how the two experiments are read against each other: the robustness result below is a floor-free result, and the Experiment C reversal is attributable to the floor rather than to any other difference between the designs." else "That is high enough that the Experiment B results below are **not** a clean floor-free baseline, and the cells where it engages should be identified before the robustness result in the next section is read at face value."`
+
+## The `flag0` robustness result
+
+One column of the design deserves separate attention: what happens when the
+reporting rate is assumed *correctly*, and only $\varphi$ and `nmix` vary.
+
+```{r}
+#| label: flag0-robust
+#| fig-height: 3.6
+#| fig-cap: "Relative bias when the assumed reporting rate is correct. flag0 is essentially unbiased everywhere; flag1's bias grows with both phi and mixing length."
+ggplot(summ_b[case == "true = assumed"],
+       aes(factor(nmix), rel_bias, colour = mode, group = mode)) +
+  geom_hline(yintercept = 0, linetype = 2, colour = "grey40") +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 1.8) +
+  facet_wrap(~ phi, labeller = labeller(phi = function(x) paste0("phi = ", x))) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_colour_manual(values = pal) +
+  labs(x = "Mixing periods (nmix)", y = "Median relative bias in F-hat",
+       colour = NULL)
+```
+
+```{r}
+#| label: robust-inline
+#| include: false
+f0_eq  <- summ_b[case == "true = assumed" & mode == "flag0", max(abs(rel_bias))]
+f1_eq_worst <- summ_b[case == "true = assumed" & mode == "flag1",
+                      rel_bias[which.min(rel_bias)]]
+f1_eq_cell  <- summ_b[case == "true = assumed" & mode == "flag1"][which.min(rel_bias)]
+```
+
+`flag0` is close to unbiased across every combination of $\varphi$ and `nmix`,
+provided the reporting rate is right — the largest absolute median bias in the
+nine cells is `r fpc(f0_eq, 1, signed = FALSE)`. This is not an accident and it
+is worth stating plainly, because it is the strongest argument *for* the default
+setting: the deterministic inversion solves for whatever mixing-period $F$
+reproduces the implied removal, so it never needs to know $\varphi$.
+Misspecifying the availability of tagged fish during mixing — the very thing the
+mixing period exists to handle — costs `flag0` nothing.
+
+`flag1` has no such protection. Its error is the recaptures it fails to remove,
+which is a fraction $(1 - X)$ of the true recaptures, accumulated over every
+mixing period. Both raising $\varphi$ and lengthening `nmix` increase the number
+of recaptures during mixing, so both make it worse — sharply. At
+$\varphi = `r f1_eq_cell$phi`$ and `nmix = `r f1_eq_cell$nmix`` the bias in $F$ is
+`r fpc(f1_eq_worst)`, which is a large upward error in biomass.
+
+## Does bracketing ever occur?
+
+```{r}
+#| label: bracket-b
+#| fig-height: 6
+#| fig-cap: "Percentage of replicates in which the true F falls between the two flag settings, by mixing length, tagged-fish availability, and reporting-rate scenario."
+wide_b <- bracket_check(
+  res_b[, .(rep, nmix, phi, X_true, case, mode, F_hat, conv)], om$F_true)
+
+brk_b <- wide_b[, .(pct = 100 * mean(brackets),
+                    width = median((hi - lo) / om$F_true)),
+                by = .(nmix, phi, case)]
+
+ggplot(brk_b, aes(factor(nmix), factor(phi), fill = pct)) +
+  geom_tile(colour = "white", linewidth = 0.6) +
+  geom_text(aes(label = sprintf("%.0f%%", pct)), size = 3.2) +
+  facet_wrap(~ case) +
+  scale_fill_gradient(low = "#F1EFE8", high = "#7F77DD", limits = c(0, 100)) +
+  labs(x = "Mixing periods (nmix)", y = "phi", fill = "% bracketing")
+```
+
+```{r}
+#| label: bracket-b-width
+#| fig-height: 3.6
+#| fig-cap: "Width of the interval spanned by the two flag settings, as a multiple of the true F. Where bracketing does occur, the interval is extremely wide."
+ggplot(brk_b, aes(factor(nmix), width, colour = factor(phi), group = factor(phi))) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 1.8) +
+  facet_wrap(~ case) +
+  labs(x = "Mixing periods (nmix)", y = "Interval width / true F",
+       colour = "phi")
+```
+
+```{r}
+#| label: bracket-b-inline
+#| include: false
+brk_lt   <- brk_b[case == "true < assumed", max(pct)]
+brk_eq_r <- brk_b[case == "true = assumed", range(pct)]
+brk_gt   <- brk_b[case == "true > assumed"][order(phi, nmix)]
+brk_gt_nz <- brk_gt[pct > 0]
+w_max    <- brk_b[case == "true > assumed", max(width)]
+w_max_c  <- brk_b[case == "true > assumed"][which.max(width)]
+w_eq_r   <- brk_b[case == "true = assumed", range(width)]
+```
+
+The heat map has a hard structural edge: **bracketing never occurs anywhere in
+the `true < assumed` column** (maximum `r fnum(brk_lt, 0)`%), at any $\varphi$ or
+`nmix`. That is not sampling noise, and it follows from the arithmetic. Because
+$X_{assumed} < 1$, the raised target $R_t / X_{assumed}$ always exceeds $R_t$, so
+`flag0` always removes more tags than `flag1` and therefore always returns the
+*larger* $\hat{F}$. The interval is always
+$[\,\hat{F}_{\text{flag1}},\ \hat{F}_{\text{flag0}}\,]$, with `flag0` as its
+upper end. Bracketing therefore requires $\hat{F}_{\text{flag0}} \ge F_{true}$,
+and `flag0` only sits above the truth when the true reporting rate is at or above
+what was assumed.
+
+**The pair is a one-sided construct.** It can only ever bracket from below, and
+only when the assumed reporting rate errs low. If your concern is that the
+assumed reporting rate is too *high*, running both flag settings cannot bound the
+truth no matter what else is going on in the model — and no diagnostic internal
+to the pair will tell you which side you are on.
+
+Within the two columns where bracketing does appear, it appears for different
+reasons:
+
+- **`true = assumed` (`r fnum(brk_eq_r[1], 0)`–`r fnum(brk_eq_r[2], 0)`%
+  throughout).** The degenerate case described in Experiment A: `flag0` is
+  unbiased, so noise straddles the truth about half the time. The rate is flat
+  across $\varphi$ and `nmix` because it reflects Monte Carlo scatter, not a
+  property of the configuration.
+- **`true > assumed` (`r fnum(min(brk_gt$pct), 0)`% to
+  `r fnum(max(brk_gt$pct), 0)`%).** Genuine two-sided coverage, arising where
+  `flag0` has blown up upward far enough that `flag1`'s own downward bias falls
+  below the truth. This is two opposite-signed biases happening to cross. It
+  appears in the following cells:
+  `r paste(sprintf("phi = %s, nmix = %s (%.0f%%)", brk_gt_nz$phi, brk_gt_nz$nmix, brk_gt_nz$pct), collapse = "; ")`
+  — that is, it needs high availability, and at $\varphi = 1$ it needs a long
+  mixing period as well.
+
+Interval width tracks that story. Where bracketing is genuine, the interval is
+enormous: at $\varphi = `r w_max_c$phi`$ and `nmix = `r w_max_c$nmix`` it spans
+roughly `r fnum(w_max, 1)` times the true $F$. An interval that contains the
+truth but is nearly twice as wide as the quantity being estimated is not usable
+as an uncertainty statement. Where bracketing is degenerate (`true = assumed`),
+the interval is tight — `r fnum(w_eq_r[1], 1)` to `r fnum(w_eq_r[2], 1)` times
+$F$ — but that tightness is meaningless, because it is anchored by an endpoint
+that happens to be unbiased for reasons the analyst cannot verify from inside the
+model.
+
+## The survival-floor condition
+
+At extreme availability the raised target $R_t / X_{assumed}$ can drive the
+tagged population below the survival floor, which is the condition that triggers
+the `posfun` rescaling in `do_newton_raphson_for_tags()`.
+
+It is worth being precise about the threshold, because the obvious statement of
+it is not the one the code implements. Reported returns can never exceed true
+recaptures, $R_t \le C_t$, so *exhaustion* of the tagged population,
+$R_t / X_{assumed} > N_t$, requires $C_t / N_t > X_{assumed}$. But MULTIFAN-CL
+does not wait for exhaustion: it floors survival at $\tau = `r CUT + FRINGE`$
+(the `age_flags(118)`/`(119)` defaults). The condition that actually engages the
+floor is therefore
+
+$$\frac{R_t}{X_{assumed}} > (1 - \tau)\, N_t
+  \quad\Longrightarrow\quad
+  \frac{C_t}{N_t} > (1 - \tau)\, X_{assumed},$$
+
+which at the default $\tau$ is a catch fraction of about
+`r fnum(1 - CUT - FRINGE, 2)` times the assumed reporting rate — roughly a fifth
+easier to reach than the exhaustion version. At $X_{assumed} = 0.5$ that is
+`r fnum((1 - CUT - FRINGE) * 0.5, 3)`; at $X_{assumed} = 0.2$ it is
+`r fnum((1 - CUT - FRINGE) * 0.2, 3)`, which ordinary fishing mortalities reach
+without anything unusual happening.
+
+This is the formal version of the trip-level argument: a trip taking a large part
+of a release group and reporting all of it engages the floor, and the lower the
+assumed reporting rate the smaller that part needs to be. The manual's warning is
+therefore less about reporting rates being uncertain than about their being low.
+
+```{r}
+#| label: floor-sweep
+#| fig-cap: "Frequency with which the flag0 removal drives survival below the floor, for the case where the true reporting rate exceeds the assumed value. The sweep extends past the main design to locate the boundary."
+floor_grid <- CJ(nmix = c(2L, 3L, 4L), phi = c(0.5, 1.0, 2.0, 4.0),
+                 rep = seq_len(150), sorted = FALSE)
+floor_grid[, cell := .GRP, by = .(nmix, phi)]
+
+floor_res <- floor_grid[, {
+  set.seed(1000L * cell + rep)
+  r <- simulate_returns(om, X_true = 0.65, phi = phi, nmix = nmix)
+  .(hits = floor_check_one(r, om, nmix))
+}, by = .(rep, cell, nmix, phi)]
+
+ggplot(floor_res[, .(pct = 100 * mean(hits > 0)), by = .(nmix, phi)],
+       aes(factor(nmix), factor(phi), fill = pct)) +
+  geom_tile(colour = "white", linewidth = 0.6) +
+  geom_text(aes(label = sprintf("%.0f%%", pct)), size = 3.2) +
+  scale_fill_gradient(low = "#F1EFE8", high = "#D85A30", limits = c(0, 100)) +
+  labs(x = "Mixing periods (nmix)", y = "phi", fill = "% floored")
+```
+
+```{r}
+#| label: floor-sweep-inline
+#| include: false
+fs <- floor_res[, .(pct = 100 * mean(hits > 0)), by = .(nmix, phi)]
+fs_main <- fs[phi <= 2, max(pct)]
+# The sentence this feeds says "beyond the main design", so the cell list is
+# restricted to the sweep extension. Without the phi filter it would silently
+# report a main-design cell in the extension's sentence if the floor ever
+# started engaging inside phi <= 2.
+fs_hit  <- fs[pct > 50 & phi > 2][order(phi, nmix)]
+```
+
+Within the range of $\varphi$ used in the main design ($\varphi \le 2$) the
+`r if (fs_main <= 0) "floor never engages" else paste0("maximum engagement rate is ", fnum(fs_main, 0), "%")`. Beyond it, the floor is reached in more
+than half of replicates in the following cells:
+`r if (nrow(fs_hit)) paste(sprintf("phi = %s with nmix = %s", fs_hit$phi, fs_hit$nmix), collapse = ", ") else "none in this sweep"`.
+
+The mechanism is worth noting because it is not obvious from the catch fraction
+alone: within a mixing period $C_t/N_t$ is constant, but the *estimator's*
+tagged population declines faster than the simulator's whenever the target is
+raised too far, so the ratio the floor tests against grows with each mixing
+period. That is why longer mixing periods trigger the floor at a given $\varphi$
+when short ones do not.
+
+Two things are worth checking in any real configuration: whether that threshold
+is being reached for any release group, and whether `age_flags(117) < 0`, in
+which case the penalty weight is zero and the rescaling happens with no trace at
+all in the objective function.
+
+A reader arriving here from Experiment C will see engagement rates that look
+incompatible with this sweep, and they are not. This sweep uses Experiment A/B's
+observation model: one release cohort of `r format(om$N0, big.mark = ",")` tags
+with deterministic Baranov recaptures, in which the realised catch fraction
+barely departs from its expectation, so only extreme availability pushes it over
+the threshold. Experiment C uses several small groups with stochastic recaptures
+and clumped reporting, where the same *expected* catch fraction produces
+realisations well into the tail. The threshold is the same; what
+differs is how far the realisations stray from it, and that is a property of
+release-group size and the reporting process, not of the floor.
+
+## Recovery of the availability multiplier
+
+```{r}
+#| label: phi-recovery
+#| fig-height: 3.6
+#| fig-cap: "Estimated phi from the forward parameterisations, in the true > assumed reporting-rate scenario. Panels are the true value of phi. Dashed lines are the true values."
+phi_res <- res_b[mode %in% c("forward", "forward_X") & conv == 0 &
+                   case == "true > assumed",
+                 .(nmix, phi, mode, phi_hat)]
+
+ggplot(phi_res, aes(factor(nmix), phi_hat, fill = mode)) +
+  geom_boxplot(outlier.size = 0.4, alpha = 0.85) +
+  geom_hline(aes(yintercept = phi), linetype = 2, colour = "grey40") +
+  facet_wrap(~ phi, scales = "free_y",
+             labeller = labeller(phi = function(x) paste0("true phi = ", x))) +
+  scale_fill_manual(values = pal) +
+  labs(x = "Mixing periods (nmix)", y = expression(hat(varphi)), fill = NULL)
+```
+
+```{r}
+#| label: phi-inline
+#| include: false
+phi_med <- phi_res[, .(m = median(phi_hat)), by = .(mode, phi, nmix)]
+phi_fx_err <- phi_med[mode == "forward_X", max(abs(m / phi - 1))]
+phi_fw_2   <- phi_med[mode == "forward" & phi == 2][order(nmix)]
+```
+
+Note that this figure conditions on one reporting-rate scenario
+(`true > assumed`); the panels are values of $\varphi$, not reporting-rate cases.
+
+`forward_X` recovers $\varphi$ accurately at all three values, including
+$\varphi > 1$, and its accuracy is stable across mixing lengths — the largest
+median error across the nine (nmix, $\varphi$) combinations is
+`r fpc(phi_fx_err, 0, signed = FALSE)`.
+
+`forward` does not, and the pattern is diagnostic. With $X$ pinned at the wrong
+value, $\hat{\varphi}$ is pulled toward 1 and the pull *strengthens* as the
+mixing period lengthens: at true $\varphi = 2$ the median falls from
+`r fnum(phi_fw_2$m[1], 2)` at `nmix = 2` to `r fnum(phi_fw_2$m[nrow(phi_fw_2)], 2)`
+at `nmix = 4`. The availability multiplier is absorbing the reporting-rate error,
+and a longer mixing period gives it more periods over which to do so. This is
+worth knowing before proposing $\varphi$ to the developers: estimating it is only
+useful if the reporting rate is also free to move, otherwise $\varphi$ becomes a
+sponge for reporting-rate misspecification rather than an estimate of
+availability.
+
+## Consistency with Experiment A
+
+Experiment A's configuration (`nmix = 2`, $\varphi = 0.5$) is one cell of
+Experiment B, fitted to independently drawn data. The two should agree to within
+Monte Carlo error, and checking that they do is the cheapest available test that
+the shared machinery is behaving.
+
+```{r}
+#| label: ab-consistency
+ab <- merge(
+  summ_a[, .(case, mode, A = rel_bias, A_mcse = mcse)],
+  summ_b[nmix == 2L & phi == 0.5, .(case, mode, B = rel_bias, B_mcse = mcse)],
+  by = c("case", "mode"))
+ab[, `:=`(diff = A - B, joint_mcse = sqrt(A_mcse^2 + B_mcse^2))]
+
+knitr::kable(ab[order(case, mode), .(case, mode, A, B, diff, joint_mcse)],
+             digits = 3,
+             caption = "Experiment A against the matching Experiment B cell.")
+```
+
+```{r}
+#| label: ab-inline
+#| include: false
+ab_flag <- ab[mode %in% c("flag0", "flag1", "forward"), max(abs(diff))]
+ab_ratio <- ab[, max(abs(diff) / joint_mcse)]
+ab_worst <- ab[which.max(abs(diff) / joint_mcse)]
+```
+
+The deterministic and fixed-$X$ estimators agree to within
+`r fpc(ab_flag, 1, signed = FALSE)`. The largest discrepancy relative to its
+joint Monte Carlo error is `r ab_worst$mode` in the `r as.character(ab_worst$case)`
+case, at `r fnum(ab_ratio, 1)` joint MCSEs. `forward_X` is the noisiest estimator
+throughout, so if any cell disagrees it should be that one — and a reader who
+notices two different numbers quoted for the same configuration in Experiments A
+and B is seeing sampling variability, not an inconsistency.
+
+# Experiment C: a realistic reporting process and the survival-floor failure mode
+
+Experiments A and B use a deliberately clean observation model: a single release
+group of 10,000 tags, deterministic Baranov recaptures, and independent Poisson
+reporting. That model cannot produce the failure the MULTIFAN-CL manual warns
+about, because with 10,000 tags and independent reporting the realised recapture
+fraction never strays far from its expectation.
+
+Three ingredients are missing, and all three are properties of real tagging data:
+
+1. **Release groups are small.** Hundreds, not tens of thousands, once split by
+   region and quarter.
+2. **Recaptures are stochastic**, not a deterministic Baranov quantity.
+3. **Reporting is clumped at the trip level.** Whether a tag is reported depends
+   largely on whether *that trip* reports, so returns arrive in batches. The
+   reporting rate is an average over trips, but the realisation for any one
+   release group is close to all-or-nothing when few trips are involved.
+
+This section adds all three and asks when the default setting actually breaks.
+The mixing-period machinery is unchanged from Experiments A and B — it is the
+same `mix_step` — so any difference in behaviour is attributable to the
+observation model and to release-group size, not to a different cap.
+
+## Machinery
+
+```{r}
+#| label: exp-c-functions
+
+# ---- stochastic Baranov + clumped trip-level reporting ---------------------
+# Each fish is caught, dies naturally, or survives (multinomial), so the
+# population dynamics stay consistent with the Baranov equation the estimator
+# assumes. Setting stochastic = FALSE and trip_size = 1 recovers the
+# Experiment A/B observation model.
+#
+# `expected = TRUE` is a third path, added for the sufficiency test in
+# Experiment D: it substitutes the expectation at BOTH stages, so neither the
+# population dynamics nor the reporting step carries any Monte Carlo noise, and
+# it works in doubles throughout because rounding the catch to whole fish would
+# show up in the third decimal of a structural bias. `stochastic = FALSE` alone
+# de-randomises only the dynamics -- the reporting step stays binomial -- which
+# is why a separate argument is needed rather than an overload.
+#
+# The realised number of reporting trips per period is attached as an
+# attribute, because it is the quantity that actually drives the clumping and
+# it is not recoverable from trip_size alone.
+simulate_group <- function(p, N0, X_g, phi, nmix,
+                           trip_size = 1, stochastic = TRUE,
+                           expected = FALSE) {
+  if (expected && stochastic)
+    stop("`expected` and `stochastic` are mutually exclusive; ",
+         "set stochastic = FALSE when asking for expected returns.")
+  if (expected && trip_size > 1)
+    stop("`expected` is only defined for un-clumped reporting (trip_size = 1).")
+
+  n <- if (expected) as.numeric(N0) else as.integer(N0)
+  r <- numeric(p$Tmax)
+  ktrips <- rep(NA_integer_, p$Tmax)
+
+  for (t in seq_len(p$Tmax)) {
+    f_t <- p$F_true * if (t <= nmix) phi else 1
+    z   <- f_t + p$M
+    s   <- exp(-z)
+    u   <- f_t / z * (1 - s)             # caught
+    v   <- p$M  / z * (1 - s)            # natural death
+
+    if (stochastic) {
+      draw <- rmultinom(1, n, c(u, v, s))
+      catch <- draw[1]; surv <- draw[3]
+    } else if (expected) {
+      catch <- u * n; surv <- s * n
+    } else {
+      catch <- as.integer(round(u * n)); surv <- as.integer(round(s * n))
+    }
+
+    if (expected) {
+      r[t] <- X_g * catch
+      ktrips[t] <- NA_integer_
+    } else if (catch > 0) {
+      if (trip_size <= 1) {
+        r[t] <- rbinom(1, catch, X_g)
+        ktrips[t] <- catch
+      } else {
+        k     <- max(round(catch / trip_size), 1)
+        alloc <- rmultinom(1, catch, rep(1 / k, k))
+        r[t]  <- sum(alloc[runif(k) < X_g])
+        ktrips[t] <- k
+      }
+    }
+    n <- surv
+  }
+  attr(r, "ktrips") <- ktrips
+  r
+}
+
+# ---- multi-group objective, shared F ---------------------------------------
+# `kernel = TRUE` replaces dpois() with the Poisson kernel mu - r*log(mu). The
+# discarded term, lgamma(r + 1), does not depend on any parameter, so the
+# argmin is unchanged. It is needed because expected returns are not integers
+# and dpois() returns zero density (and a warning) for non-integer x, which
+# would make the deterministic fits in Experiment D fail rather than converge.
+nll_multi <- function(par, groups, p, mode, nmix, prior_sd = 0.4,
+                      kernel = FALSE) {
+  f_pop <- exp(par[1])
+  phi   <- if (mode %in% c("forward", "forward_X")) exp(par[2]) else 1
+  x     <- if (mode == "forward_X") plogis(par[3]) else p$X_assumed
+
+  nll <- 0
+  for (g in seq_along(groups)) {
+    r <- groups[[g]]$returns
+    n <- groups[[g]]$N0
+
+    for (t in seq_len(p$Tmax)) {
+      premix <- t <= nmix
+
+      if (premix && mode %in% c("flag0", "flag1")) {
+        st  <- mix_step(r[t], n, p, mode)
+        f_t <- st$f
+        nll <- nll + PENWT * st$pen
+      } else {
+        f_t <- if (premix) f_pop * phi else f_pop
+        mu  <- x * baranov(f_t, n, p$M) + 1e-10
+        nll <- nll + if (kernel) mu - r[t] * log(mu)
+                     else -dpois(r[t], mu, log = TRUE)
+      }
+      n <- n * exp(-(f_t + p$M))
+    }
+  }
+
+  if (mode == "forward_X") {
+    nll <- nll + 0.5 * ((log(x) - log(p$X_assumed)) / prior_sd)^2
+  }
+  nll
+}
+
+fit_multi <- function(groups, p, mode, nmix, interval = LOGF_INT,
+                      kernel = FALSE) {
+  mode <- as.character(mode)[1L]
+
+  if (mode %in% c("flag0", "flag1")) {
+    opt <- stats::optimize(
+      function(lf) nll_multi(c(lf, 0, 0), groups, p, mode, nmix,
+                             kernel = kernel),
+      interval = interval, tol = 1e-10)
+    return(data.table(F_hat = exp(opt$minimum), phi_hat = NA_real_,
+                      X_hat = p$X_assumed, conv = 0L,
+                      at_bound = at_bound_lf(opt$minimum, interval)))
+  }
+
+  opt <- stats::optim(
+    par = c(log(0.10), 0, qlogis(p$X_assumed)),
+    fn  = function(par) nll_multi(par, groups, p, mode, nmix,
+                                  kernel = kernel),
+    method = "Nelder-Mead",
+    control = list(maxit = 4000, reltol = 1e-11))
+
+  data.table(F_hat    = exp(opt$par[1]),
+             phi_hat  = exp(opt$par[2]),
+             X_hat    = if (mode == "forward_X") plogis(opt$par[3]) else p$X_assumed,
+             conv     = opt$convergence,
+             at_bound = FALSE)
+}
+
+# ---- diagnostic: how often, and how widely, does the floor engage? ---------
+# Uses the same mix_step as the estimator, so the two advance the tagged
+# population identically. If they were allowed to diverge, the floor frequency
+# reported here would not be the one the estimator experienced.
+floor_check <- function(groups, p, nmix) {
+  hits <- 0L; tot <- 0L
+  for (g in seq_along(groups)) {
+    r <- groups[[g]]$returns; n <- groups[[g]]$N0
+    for (t in seq_len(nmix)) {
+      st <- mix_step(r[t], n, p, "flag0")
+      if (st$floored) hits <- hits + 1L
+      tot <- tot + 1L
+      n <- n * exp(-(st$f + p$M))
+    }
+  }
+  list(any = hits > 0L, hits = hits, frac = hits / tot)
+}
+```
+
+## Design
+
+Eight release groups of 500 tags each, sharing one fishing mortality, with a
+mixing period of **`nmix = 3` quarters** and availability
+$\varphi \in \{1, 2\}$. The mixing length is fixed here — Experiment B is the
+experiment that varies it — which matters when reading Experiment C against
+Experiment B's claim of robustness across `nmix`.
+
+The assumed reporting rate becomes a factor: it is the axis the survival-floor
+condition depends on, and it is the quantity under dispute in the current
+assessment. Trip size is expressed as a percentage of the *release group*, so
+25% means a trip large enough to take a quarter of the group.
+
+Runtime note: this design carries all four estimators. Two of them are
+one-dimensional, so the cost is dominated by the two forward modes and is lower
+than the estimator count suggests.
+
+Group-specific reporting rates are drawn on the logit scale and recentred there.
+Drawing them on the natural scale would require clamping away from zero, which at
+$X_{assumed} = 0.2$ truncates enough of the distribution to induce a small upward
+bias in the realised mean rate — an artefact of the sampling scheme that would be
+indistinguishable from an estimator property. The cost of working on the logit
+scale is that the arithmetic mean of the realised rates is correct only to within
+a Jensen term; that term is reported below so its size is visible rather than
+assumed.
+
+```{r}
+#| label: exp-c-run
+n_rep_c    <- 30           # raise for smoother medians
+G          <- 8            # release groups
+N0_g       <- 500          # tags per group
+rr_sd_lgt  <- 0.45         # between-group sd of logit(reporting rate)
+NMIX_C     <- 3L           # mixing periods, fixed for this experiment
+
+modes_c <- c("flag0", "flag1", "forward", "forward_X")
+
+design_c <- CJ(X_assumed = c(0.20, 0.35, 0.50),
+               trip_pct  = c(0.01, 0.10, 0.25),
+               phi       = c(1.0, 2.0),
+               mode      = modes_c,
+               rep       = seq_len(n_rep_c), sorted = FALSE)
+
+# `cell` deliberately excludes `mode`, so all four estimators see the same
+# simulated dataset within a replicate and the comparison stays paired.
+design_c[, cell := .GRP, by = .(X_assumed, trip_pct, phi)]
+
+make_groups <- function(p, phi, nmix, trip_pct, rr_sd_logit) {
+  lx <- rnorm(G, qlogis(p$X_assumed), rr_sd_logit)
+  lx <- lx - mean(lx) + qlogis(p$X_assumed)   # exact on the logit scale
+  xs <- plogis(lx)
+  gs <- lapply(seq_len(G), function(g)
+    list(N0 = N0_g,
+         X_g = xs[g],
+         returns = simulate_group(p, N0_g, xs[g], phi, nmix,
+                                  trip_size = max(trip_pct * N0_g, 1),
+                                  stochastic = TRUE)))
+  gs
+}
+
+res_c <- design_c[, {
+  p <- modifyList(om, list(X_assumed = X_assumed))
+  set.seed(1000L * cell + rep)
+  gs  <- make_groups(p, phi, NMIX_C, trip_pct, rr_sd_lgt)
+  fit <- fit_multi(gs, p, mode = mode, nmix = NMIX_C)
+  fl  <- floor_check(gs, p, NMIX_C)
+  cbind(fit,
+        floored     = fl$any,
+        floor_frac  = fl$frac,
+        mean_X      = mean(vapply(gs, `[[`, numeric(1), "X_g")),
+        min_ktrips  = min(vapply(gs, function(g) {
+                          kt <- attr(g$returns, "ktrips")[seq_len(NMIX_C)]
+                          kt <- kt[!is.na(kt)]
+                          if (!length(kt)) NA_real_ else as.numeric(min(kt))
+                        }, numeric(1)), na.rm = TRUE))
+}, by = .(rep, cell, X_assumed, trip_pct, phi, mode)]
+
+res_c[, `:=`(mode = factor(mode, levels = modes_c),
+             rel_bias = F_hat / om$F_true - 1)]
+```
+
+```{r}
+#| label: exp-c-diagnostics
+knitr::kable(
+  res_c[mode == "flag0",
+        .(`mean realised X` = mean(mean_X),
+          `relative error`  = mean(mean_X) / X_assumed[1] - 1),
+        by = .(`X assumed` = X_assumed)][order(`X assumed`)],
+  digits = 4,
+  caption = paste0(
+    "Realised mean reporting rate against the assumed value. The residual ",
+    "is the Jensen term from recentring on the logit scale."))
+
+trips_tab <- dcast(res_c[mode == "flag0",
+                         .(median_trips = median(min_ktrips)),
+                         by = .(phi, trip_pct)],
+                   trip_pct ~ phi, value.var = "median_trips")
+trips_tab[, trip_pct := 100 * trip_pct]
+setnames(trips_tab, "trip_pct", "Trip size (%)")
+
+knitr::kable(
+  trips_tab, digits = 0,
+  caption = paste0(
+    "Median of the smallest number of reporting trips in any release group ",
+    "during mixing, by phi (columns)."))
+
+knitr::kable(
+  dcast(res_c[, .(flagged = sum(conv != 0 | at_bound)), by = .(X_assumed, mode)],
+        X_assumed ~ mode, value.var = "flagged"),
+  caption = paste0("Experiment C: fits that either failed to converge or ",
+                   "returned an estimate on the edge of the search interval, ",
+                   "out of ", n_rep_c * 9, " per (X assumed, estimator)."))
+```
+
+```{r}
+#| label: trips-inline
+#| include: false
+kt <- res_c[mode == "flag0", .(mk = median(min_ktrips)), by = .(phi, trip_pct)]
+kt_worst <- kt[which.min(mk)]
+```
+
+The trip table is worth pausing on. At `trip_pct` = `r kt_worst$trip_pct` and
+$\varphi = `r kt_worst$phi`$ the median release group has as few as
+`r fnum(kt_worst$mk, 0)` reporting `r if (kt_worst$mk == 1) "trip" else "trips"`
+in its worst mixing period. "A trip takes
+a quarter of the group" understates what is happening at that corner of the
+design: the period's entire catch is close to a single all-or-nothing reporting
+decision. That is the cell driving the top-right of the map below, and it should
+be read as the extreme end of the clumping axis rather than as a typical fishery.
+
+## How often does the floor engage?
+
+```{r}
+#| label: exp-c-runout
+#| fig-height: 3.8
+#| fig-cap: "Percentage of replicates in which flag0's raised removal drives survival below the floor for at least one release group. The assumed reporting rate is correct on average on the logit scale in every cell; the small residual at the lowest assumed rate is the Jensen term reported above."
+ro <- res_c[mode == "flag0" & conv == 0,
+            .(pct = 100 * mean(floored), frac = 100 * mean(floor_frac)),
+            by = .(X_assumed, trip_pct, phi)]
+
+ggplot(ro, aes(factor(100 * trip_pct), factor(X_assumed), fill = pct)) +
+  geom_tile(colour = "white", linewidth = 0.6) +
+  geom_text(aes(label = sprintf("%.0f%%", pct)), size = 3.2) +
+  facet_wrap(~ phi, labeller = labeller(phi = function(x) paste0("phi = ", x))) +
+  scale_fill_gradient(low = "#F1EFE8", high = "#D85A30", limits = c(0, 100)) +
+  labs(x = "Trip size (% of release group)", y = "Assumed reporting rate",
+       fill = "% floored")
+```
+
+```{r}
+#| label: exp-c-runout-2
+#| fig-height: 3.8
+#| fig-cap: "The same design, but showing the proportion of all group-periods floored rather than the proportion of replicates with at least one. A replicate in which one group trips the floor once is a different object from one in which most groups trip it repeatedly, and the binary map cannot distinguish them."
+ggplot(ro, aes(factor(100 * trip_pct), factor(X_assumed), fill = frac)) +
+  geom_tile(colour = "white", linewidth = 0.6) +
+  geom_text(aes(label = sprintf("%.0f%%", frac)), size = 3.2) +
+  facet_wrap(~ phi, labeller = labeller(phi = function(x) paste0("phi = ", x))) +
+  scale_fill_gradient(low = "#F1EFE8", high = "#D85A30", limits = c(0, 100)) +
+  labs(x = "Trip size (% of release group)", y = "Assumed reporting rate",
+       fill = "% of group-periods")
+```
+
+```{r}
+#| label: runout-inline
+#| include: false
+ro_lo_hi <- ro[X_assumed == 0.20 & phi == 2, range(pct)]
+ro_hi_p1 <- ro[X_assumed == 0.50 & phi == 1, range(pct)]
+ro_hi_p2 <- ro[X_assumed == 0.50 & phi == 2, range(pct)]
+ro_trip_lo <- ro[X_assumed == 0.20 & phi == 1][order(trip_pct)]
+ro_fine_p2 <- ro[X_assumed == 0.20 & phi == 2 & trip_pct == 0.01, pct]
+```
+
+Three factors drive the failure, and none of them is a reporting-rate error.
+
+**The assumed reporting rate is the strongest.** At $X_{assumed} = 0.5$ with
+$\varphi = 1$ the floor engages in `r fpp_range(ro_hi_p1)`
+of replicates; at $X_{assumed} = 0.2$ with $\varphi = 2$ it is
+`r fpp_range(ro_lo_hi)`. This follows directly from
+the condition above: a lower assumed rate sets a lower bar for the realised catch
+fraction to clear.
+
+**Availability during mixing matters nearly as much.** Moving from $\varphi = 1$
+to $\varphi = 2$ raises the $X_{assumed} = 0.5$ row from
+`r fpp_range(ro_hi_p1)` to `r fpp_range(ro_hi_p2)`. More recaptures during mixing
+means more opportunity for one of them to be an extreme realisation. This is why
+the summary qualifies the moderate-reporting-rate case: a moderate assumed rate
+is not on its own a guarantee that the floor is inactive.
+
+**Trip size matters, but it is the weakest of the three.** Coarse reporting makes
+the failure more frequent — at $X_{assumed} = 0.2$, $\varphi = 1$ it rises from
+`r fnum(ro_trip_lo$pct[1], 0)`% to `r fnum(ro_trip_lo$pct[nrow(ro_trip_lo)], 0)`%
+across the trip-size range — but fine-grained reporting does *not* protect you
+when the other two factors are adverse: at $X_{assumed} = 0.2$ and $\varphi = 2$,
+trips taking just 1% of a release group still trigger it in
+`r fnum(ro_fine_p2, 0)`% of replicates.
+
+**This is the mechanism behind the manual's recommendation, and it is governed
+mainly by the assumed reporting rate.** An assessment that revises its
+tag-seeding estimates downward moves itself into the regime where the default
+breaks, without changing anything else about the model.
+
+## What it costs
+
+```{r}
+#| label: exp-c-bias
+#| fig-height: 5.6
+#| fig-cap: "Distribution of relative bias in F. Where the floor rarely engages (X assumed = 0.5, phi = 1) flag0 stays centred with inflated spread; where it routinely engages (X assumed = 0.2, phi = 2) flag0's median turns substantially negative."
+ggplot(res_c[conv == 0], aes(factor(100 * trip_pct), rel_bias, fill = mode)) +
+  geom_hline(yintercept = 0, linetype = 2, colour = "grey40") +
+  geom_boxplot(outlier.size = 0.4, alpha = 0.85) +
+  facet_grid(X_assumed ~ phi,
+             labeller = labeller(phi = function(x) paste0("phi = ", x),
+                                 X_assumed = function(x) paste0("X = ", x))) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = pal) +
+  labs(x = "Trip size (% of release group)", y = "Relative bias in F-hat",
+       fill = NULL)
+```
+
+```{r}
+#| label: exp-c-table
+summ_c <- res_c[conv == 0,
+                .(med  = median(rel_bias),
+                  mcse = mcse_median(F_hat) / om$F_true,
+                  iqr  = as.numeric(diff(quantile(rel_bias, c(.25, .75))))),
+                by = .(X_assumed, trip_pct, phi, mode)]
+
+# Median, IQR and MCSE go in three narrow tables rather than one wide one: at
+# the width this document renders to, an eight-column dcast overprints its
+# headers. Trip size is displayed as a percentage to match the prose.
+disp_c  <- copy(summ_c)[, trip_pct := 100 * trip_pct]
+cols_c  <- c("X assumed", "Trip size (%)", "phi", levels(disp_c$mode))
+
+knitr::kable(
+  dcast(disp_c, X_assumed + trip_pct + phi ~ mode, value.var = "med"),
+  digits = 3, col.names = cols_c,
+  caption = "Median relative bias in F-hat by estimator.")
+
+knitr::kable(
+  dcast(disp_c, X_assumed + trip_pct + phi ~ mode, value.var = "iqr"),
+  digits = 3, col.names = cols_c,
+  caption = "Interquartile range of relative bias, same design.")
+
+knitr::kable(
+  dcast(disp_c, X_assumed + trip_pct + phi ~ mode, value.var = "mcse"),
+  digits = 3, col.names = cols_c,
+  caption = "Monte Carlo standard error of the medians above.")
+```
+
+```{r}
+#| label: exp-c-inline
+#| include: false
+c_f0_safe   <- summ_c[mode == "flag0" & X_assumed == 0.50 & phi == 1]
+c_f0_bad    <- summ_c[mode == "flag0" & X_assumed == 0.20 & phi == 2][order(trip_pct)]
+# The bolded direction claim is about the sign of the bias where the floor is
+# operative, not about the direction of travel along the trip-size axis. The two
+# agree in the current run but need not: the least-clumped cell sits on the
+# other side of zero, so keying the claim off the endpoint difference would let
+# a sign change in a cell where the floor barely bites flip a sentence about what
+# the floor does. Merge per-cell floor severity in and key the claim on the cell
+# where the floor bites hardest.
+#
+# Severity is the proportion of group-periods floored, not the proportion of
+# replicates with at least one floored group-period. Both are available; the
+# second is nearly saturated in this row (it exceeds half in every cell) and the
+# document has already made the point that a binary map cannot distinguish one
+# group tripping once from most groups tripping repeatedly.
+c_f0_bad_floor <- res_c[mode == "flag0" & conv == 0 &
+                        X_assumed == 0.20 & phi == 2,
+                        .(floor_any = 100 * mean(floored),
+                          floor_pp  = 100 * mean(floor_frac)), by = trip_pct]
+c_f0_bad_n <- nrow(c_f0_bad)
+c_f0_bad <- merge(c_f0_bad, c_f0_bad_floor, by = "trip_pct")[order(trip_pct)]
+# Checked against the row count going in, not against the floor table: if a
+# whole cell were lost upstream both tables would shrink together and a
+# self-consistent merge would hide it.
+stopifnot(nrow(c_f0_bad) == c_f0_bad_n)
+c_f0_bad_hi  <- c_f0_bad[which.max(floor_pp)]
+c_f0_bad_lo  <- c_f0_bad[which.min(floor_pp)]
+c_f0_bad_dir <- if (c_f0_bad_hi$med < 0) "downward" else "upward"
+# Asserting a movement across the trip-size axis needs a comparison against
+# Monte Carlo error, not just the ordering of three medians. At this replicate
+# count the step-to-step differences are inside their own MCSEs, so the
+# ordering alone would be an over-reading; the endpoint difference is what the
+# design can actually resolve, and that is what the prose quotes.
+c_f0_bad_ends     <- c_f0_bad[c(1, .N)]
+c_f0_bad_gap      <- diff(c_f0_bad_ends$med)
+c_f0_bad_gap_mcse <- sqrt(sum(c_f0_bad_ends$mcse^2))
+c_f0_bad_resolved <- abs(c_f0_bad_gap) > 2 * c_f0_bad_gap_mcse
+# The step-to-step differences are checked separately, because whether any
+# individual step is resolved is a different question from whether the two ends
+# differ, and the prose should not assert either without computing it.
+c_f0_bad_steps     <- diff(c_f0_bad$med)
+c_f0_bad_step_mcse <- sqrt(head(c_f0_bad$mcse, -1)^2 + tail(c_f0_bad$mcse, -1)^2)
+c_f0_bad_step_res  <- abs(c_f0_bad_steps) > 2 * c_f0_bad_step_mcse
+c_f1        <- summ_c[mode == "flag1"]
+c_fx        <- summ_c[mode == "forward_X"]
+c_fw        <- summ_c[mode == "forward"]
+# Is forward_X really the widest?
+c_wide <- dcast(summ_c, X_assumed + trip_pct + phi ~ mode, value.var = "iqr")
+c_fx_widest <- c_wide[, mean(forward_X >= pmax(flag0, flag1, forward))]
+# Does the flag0-vs-forward decomposition survive?
+c_gap <- dcast(summ_c[mode %in% c("flag0", "forward")],
+               X_assumed + trip_pct + phi ~ mode, value.var = "med")
+c_gap[, gap := flag0 - forward]
+```
+
+The headline from Experiment B does **not** survive intact, and the pattern
+divides cleanly along the floor frequency mapped above.
+
+**Where the floor rarely engages, the cost is precision.** At
+$X_{assumed} = 0.5$ with $\varphi = 1$, `flag0`'s median bias stays within
+`r fpc(max(abs(c_f0_safe$med)), 0, signed = FALSE)`, consistent with Experiment
+B. But its interquartile range widens from `r fnum(min(c_f0_safe$iqr), 2)` to
+`r fnum(max(c_f0_safe$iqr), 2)` as trip size coarsens. Individual replicates swing
+in both directions, because a single release group whose trips happened to report
+can drive the raised removal, and hence the whole estimate of $F$, a long way.
+
+**Where the floor routinely engages, the cost is accuracy, and it runs
+`r c_f0_bad_dir`.** At $X_{assumed} = 0.2$ with $\varphi = 2$, `flag0`'s median
+bias ranges over `r fpc_range(c_f0_bad$med)`:
+`r paste(sprintf("%s at trip size %s%%", fpc(c_f0_bad$med, 0), 100 * c_f0_bad$trip_pct), collapse = ", ")`.
+Between the least- and most-clumped cells the median moves by
+`r fpc(c_f0_bad_gap)` against a joint Monte Carlo standard error of
+`r fpc(c_f0_bad_gap_mcse, 1, signed = FALSE)`, so that shift
+`r if (c_f0_bad_resolved) "is resolved by this design" else "is not resolved by this design and should not be leaned on"`.
+Taken step by step, `r sum(c_f0_bad_step_res)` of the
+`r length(c_f0_bad_step_res)` successive differences
+`r if (sum(c_f0_bad_step_res) == 1) "is" else "are"` resolved against its own
+Monte Carlo error, so
+`r if (all(c_f0_bad_step_res)) "the cells are separated step by step as well as end to end" else "the step-by-step ordering of the cells is not a result of this design, and only the movement between its ends should be read as one"`.
+`r if (c_f0_bad_hi$med < 0 && c_f0_bad_lo$med > 0) paste0("The cell on the positive side is the one where the floor bites least (", fnum(c_f0_bad_lo$floor_pp, 0), "% of group-periods floored); the cell where it bites hardest (", fnum(c_f0_bad_hi$floor_pp, 0), "%) is on the negative side. Note that even the mildest of the three floors in ", fnum(c_f0_bad_lo$floor_any, 0), "% of replicates, so engagement frequency alone does not locate the sign change. Floor severity and clumping rise together across this row, so the design cannot separate them -- what it shows is that the sign turns over as the floor takes hold.") else if (all(c_f0_bad$med < 0)) "Every cell in this row is negative, including the one where the floor bites least." else "The sign does not track floor severity across these cells in this run, which is worth checking against the Monte Carlo errors before it is interpreted."` The mechanism deserves to
+be stated explicitly: once `posfun` caps the removal, `flag0` can no longer take
+out the number of tags its own rule demands, so it **under-removes** — which is
+precisely `flag1`'s failure mode. Under floor engagement the default degenerates
+toward the alternative it is supposed to improve on, and the bias it contributes
+runs negative, meaning biomass biased *upward*.
+
+This is the most important qualification to the Experiment B result. The
+unbiasedness of `flag0` is conditional not only on the reporting rate being
+right, but on the survival floor not engaging — and the second condition is
+easiest to violate exactly when assumed reporting rates are low.
+
+`flag1` behaves as Experiment D predicts throughout: median bias in
+`r fpc_range(c_f1$med)`, driven by $\varphi$ rather than by trip size, and
+consistently the most *precise* of the estimators (interquartile ranges of
+`r fnum(min(c_f1$iqr), 2)` to `r fnum(max(c_f1$iqr), 2)`). Precisely wrong is
+still wrong, but `flag1`'s error is at least predictable in a way `flag0`'s is
+not.
+
+`forward_X` needs a caveat of its own here. Its accuracy in Experiments A and B
+does not carry over to this small-sample, multi-group setting: medians range over
+`r fpc_range(c_fx$med)`, and interquartile ranges reach
+`r fnum(max(c_fx$iqr), 2)`. It is the widest of the estimators in
+`r fnum(100 * c_fx_widest, 0)`% of the 18 cells. With eight groups of 500 tags
+there is not enough information to estimate the reporting rate, the availability
+multiplier and $F$ simultaneously. The likelihood-based treatment is structurally
+correct but it is not free: it needs data to support the extra parameters, and a
+fragmented tagging programme may not supply them.
+
+## Does the mixing-channel decomposition survive?
+
+`forward` is included here for the same reason it exists in Experiments A and B:
+it handles the mixing period correctly while keeping $X$ fixed at the assumed
+value, so the `flag0`–`forward` gap isolates what the mixing treatment
+contributes beyond the reporting-rate channel. Experiment C is the experiment
+that overturns the other Experiment B headlines, so the decomposition should not
+be assumed to carry over.
+
+```{r}
+#| label: exp-c-gap
+#| fig-height: 3.6
+#| fig-cap: "Median bias for flag0 and forward in Experiment C. The vertical distance between the two series is the contribution of the deterministic mixing treatment, holding the reporting-rate treatment fixed."
+ggplot(summ_c[mode %in% c("flag0", "forward")],
+       aes(factor(100 * trip_pct), med, colour = mode, group = mode)) +
+  geom_hline(yintercept = 0, linetype = 2, colour = "grey40") +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 1.8) +
+  facet_grid(X_assumed ~ phi,
+             labeller = labeller(phi = function(x) paste0("phi = ", x),
+                                 X_assumed = function(x) paste0("X = ", x))) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_colour_manual(values = pal) +
+  labs(x = "Trip size (% of release group)", y = "Median relative bias in F-hat",
+       colour = NULL)
+```
+
+```{r}
+#| label: exp-c-gap-inline
+#| include: false
+gap_safe <- c_gap[X_assumed == 0.50 & phi == 1, max(abs(gap))]
+gap_bad  <- c_gap[X_assumed == 0.20 & phi == 2, range(gap)]
+gap_max  <- c_gap[which.max(abs(gap))]
+```
+
+Note that in this experiment the reporting rate is correct on average, so
+`forward` is not carrying a reporting-rate error in the way it does in
+Experiments A and B; the gap here isolates the deterministic inversion against a
+correctly specified alternative rather than decomposing a misspecification. Where
+the floor is inactive ($X_{assumed} = 0.5$, $\varphi = 1$) the two agree to
+within `r fpc(gap_safe, 0, signed = FALSE)`. Where it is active the gap widens to
+`r fpc_range(gap_bad)`, with the largest single gap
+(`r fpc(gap_max$gap)`) at $X_{assumed} = `r gap_max$X_assumed`$,
+$\varphi = `r gap_max$phi`$, trip size `r 100 * gap_max$trip_pct`%. The
+deterministic treatment is therefore a second-order channel exactly where the
+floor is inactive and a first-order one where it is not — the same boundary that
+governs everything else in this experiment.
+
+# Experiment D: the mixing-period recapture fraction
+
+Experiment B varied $\varphi$ and `nmix` separately, which is how an analyst
+encounters them — one is a property of the fishery, the other a configuration
+choice. But for `flag1` they are not two effects. Both act only by changing how
+many tags are recaptured while the mixing rule is in force.
+
+Define
+
+$$\psi = \frac{1}{N_0}\sum_{t \le n_{mix}} C_t,$$
+
+the expected fraction of a release group recaptured during the mixing period.
+This is directly computable from a real `.tag` file given `tag_flags(i,1)`,
+which makes it the useful axis: an analyst can measure $\psi$ for their own data
+and read off the expected bias.
+
+## Why $\psi$ should govern the `flag1` bias {#sec-why-psi}
+
+`flag1` removes $R_t$ where it should remove $C_t$, so in expectation it
+under-removes by $(1 - X)\,C_t$ each mixing period, and $(1-X)\,\psi N_0$ in
+total. The surviving tagged cohort entering the informative periods is therefore
+too large by that amount. Predicted recaptures scale with the cohort, so to
+match the observed post-mixing returns the model compensates with a smaller $F$:
+
+$$\frac{\hat{F}}{F} \;\approx\; \frac{N_{post}}{N_{post} + (1-X)\,\psi N_0},
+\qquad N_{post} = N_0\,e^{-(\varphi F + M)\,n_{mix}}.$$
+
+Note carefully what this does and does not predict. The bias depends on
+$\varphi$ and `nmix` only through $\psi$ and $N_{post}$ — but $N_{post}$ carries
+an `nmix` dependence of its own, over and above the one that runs through
+$\psi$. Two configurations with different $\varphi$ and `nmix` but the same
+$\psi$ are therefore predicted to be *close*, not identical, and the one with
+the longer mixing period is predicted to be the worse of the two: it reaches
+the same recapture fraction with a smaller surviving cohort to carry the
+un-removed tags. Whether that separation is large enough to matter for an
+assessment is a quantitative question, and it is the one the sufficiency test
+below is built to answer.
+
+```{r}
+#| label: exp-d-setup
+psi_of <- function(p, phi, nmix) {
+  n <- p$N0; tot <- 0
+  for (t in seq_len(nmix)) {
+    tot <- tot + baranov(p$F_true * phi, n, p$M)
+    n   <- n * exp(-(p$F_true * phi + p$M))
+  }
+  tot / p$N0
+}
+
+bias_pred <- function(p, phi, nmix, X) {
+  psi   <- psi_of(p, phi, nmix)
+  npost <- p$N0 * exp(-(p$F_true * phi + p$M) * nmix)
+  under <- (1 - X) * psi * p$N0
+  -under / (npost + under)
+}
+
+# psi_of() is monotone increasing in phi at fixed nmix, so it can be inverted
+# for a target recapture fraction. This is what turns psi from an outcome of
+# the design into a controlled variable, and it is the whole basis of the
+# sufficiency test below: without it, no two cells share a psi exactly.
+phi_for_psi <- function(target, nmix, p = om, phi_max = 20) {
+  if (psi_of(p, phi_max, nmix) < target) return(NA_real_)
+  uniroot(function(ph) psi_of(p, ph, nmix) - target,
+          interval = c(1e-8, phi_max), tol = 1e-10)$root
+}
+
+# The loop in psi_of() and the closed form below are the same quantity: summing
+# Baranov catch over a geometrically declining cohort telescopes to
+# (phi*F/Z)(1 - exp(-nmix*Z)). Asserting it keeps the two from drifting if
+# either is edited, and documents where the closed form comes from -- it is the
+# expression an analyst needs to compute expected psi for a configuration they
+# have not run.
+psi_closed <- function(p, phi, nmix) {
+  z <- p$F_true * phi + p$M
+  (p$F_true * phi / z) * (1 - exp(-nmix * z))
+}
+stopifnot(all(abs(mapply(function(ph, nm) psi_of(om, ph, nm) -
+                           psi_closed(om, ph, nm),
+                         c(0.25, 0.5, 1, 2, 3),
+                         c(2L, 3L, 4L, 2L, 3L))) < 1e-12))
+```
+
+## Simulation
+
+Reporting is left un-clumped here so that $\psi$ is isolated from the dispersion
+effects of Experiment C. Four release groups of 2,000 tags, correct reporting
+rate throughout, so the *only* thing varying is how much of each group is
+recaptured before the mixing rule releases its grip.
+
+```{r}
+#| label: exp-d-run
+n_rep_d <- 40
+N0_d    <- 2000
+G_d     <- 4
+
+design_d <- CJ(phi  = c(0.25, 0.5, 1.0, 2.0, 3.0),
+               nmix = c(2L, 3L, 4L),
+               mode = c("flag0", "flag1"),
+               rep  = seq_len(n_rep_d), sorted = FALSE)
+design_d[, cell := .GRP, by = .(phi, nmix)]
+
+res_d <- design_d[, {
+  set.seed(1000L * cell + rep)
+  gs <- lapply(seq_len(G_d), function(g)
+    list(N0 = N0_d,
+         returns = simulate_group(om, N0_d, om$X_assumed, phi, nmix,
+                                  trip_size = 1, stochastic = TRUE)))
+  fit_multi(gs, om, mode = mode, nmix = nmix)
+}, by = .(rep, cell, phi, nmix, mode)]
+
+res_d[, `:=`(mode = factor(mode, levels = c("flag0", "flag1")),
+             rel_bias = F_hat / om$F_true - 1)]
+
+summ_d <- res_d[conv == 0, .(bias = median(rel_bias),
+                             mcse = mcse_median(F_hat) / om$F_true),
+                by = .(phi, nmix, mode)]
+summ_d[, psi  := psi_of(om, phi, nmix), by = .(phi, nmix)]
+summ_d[, pred := bias_pred(om, phi, nmix, om$X_assumed), by = .(phi, nmix)]
+```
+
+```{r}
+#| label: exp-d-plot
+#| fig-height: 4
+#| fig-cap: "Median relative bias against the mixing-period recapture fraction. Points are simulated, with error bars at two Monte Carlo standard errors; the dashed line is the analytic prediction for flag1. Configurations with different phi and nmix collapse onto a single curve."
+ggplot(summ_d, aes(psi, bias)) +
+  geom_hline(yintercept = 0, linetype = 2, colour = "grey40") +
+  geom_line(data = summ_d[mode == "flag1"][order(psi)],
+            aes(y = pred), linetype = 2, colour = "grey30") +
+  geom_linerange(aes(ymin = bias - 2 * mcse, ymax = bias + 2 * mcse,
+                     colour = mode), alpha = 0.6) +
+  geom_point(aes(colour = mode, shape = factor(nmix)), size = 2.4) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_colour_manual(values = pal) +
+  labs(x = expression(psi~"(fraction of release group recaptured during mixing)"),
+       y = "Median relative bias in F-hat",
+       colour = NULL, shape = "nmix")
+```
+
+```{r}
+#| label: exp-d-table
+tab_d <- merge(dcast(summ_d, phi + nmix + psi ~ mode, value.var = "bias"),
+               summ_d[mode == "flag1", .(phi, nmix, predicted = pred)],
+               by = c("phi", "nmix"))
+
+knitr::kable(tab_d[order(psi), .(phi, nmix, psi, flag0, flag1, predicted)],
+             digits = 3,
+             col.names = c("phi", "nmix", "psi", "flag0", "flag1",
+                           "flag1 predicted"),
+             caption = paste0(
+               "Bias against the mixing-period recapture fraction, with the ",
+               "analytic prediction."))
+```
+
+```{r}
+#| label: exp-d-check
+d_cor <- summ_d[mode == "flag1", cor(bias, pred)]
+cat(sprintf("Correlation between simulated and predicted flag1 bias: %.4f\n",
+            d_cor))
+```
+
+```{r}
+#| label: exp-d-inline
+#| include: false
+d_f0 <- summ_d[mode == "flag0"]
+d_f0_max <- d_f0[which.max(abs(bias))]
+d_f0_sig <- d_f0[abs(bias) > 2 * mcse]
+```
+
+## Is $\psi$ sufficient?
+
+The design above crosses $\varphi$ and `nmix` and reports whatever $\psi$ falls
+out, so no two cells share a $\psi$ exactly and the collapse onto a single curve
+can only be judged by eye against the fitted line. The question the prediction
+actually raises — whether two configurations with the *same* $\psi$ behave the
+same — needs a design in which $\psi$ is controlled rather than observed.
+
+Inverting `psi_of()` supplies one. Solving for the $\varphi$ that delivers a
+target $\psi$ at each mixing length puts the cells on a common $\psi$ grid, and
+fitting to expected rather than simulated returns removes the Monte Carlo noise
+entirely, so any separation between mixing lengths at the same $\psi$ is
+structural rather than scatter. No Monte Carlo standard errors are reported in
+this subsection because there is no Monte Carlo.
+
+```{r}
+#| label: exp-d-suff-calib
+PSI_TARGETS <- c(0.05, 0.10, 0.20, 0.30, 0.40, 0.50)
+
+calib <- CJ(psi_t = PSI_TARGETS, nmix = 2:4)
+calib[, phi := mapply(phi_for_psi, psi_t, nmix)]
+calib <- calib[is.finite(phi)]
+
+knitr::kable(dcast(calib, psi_t ~ nmix, value.var = "phi"), digits = 2,
+             col.names = c("psi", "nmix = 2", "nmix = 3", "nmix = 4"),
+             caption = paste0(
+               "Availability multiplier required to reach each target ",
+               "recapture fraction, by mixing length."))
+```
+
+This calibration table is worth reading before the results. Reaching a high
+$\psi$ over a short mixing period requires a large availability multiplier;
+reaching the same $\psi$ over four periods requires much less. The top two rows
+need multipliers above the range Experiment B covered, so they complete the grid
+rather than describing configurations anyone should expect to meet.
+
+```{r}
+#| label: exp-d-suff
+grid_suff <- CJ(psi_t = PSI_TARGETS, nmix = 2:4,
+                mode = c("flag0", "flag1"), sorted = FALSE)
+grid_suff <- merge(grid_suff, calib, by = c("psi_t", "nmix"))
+
+res_suff <- grid_suff[, {
+  # One release group, expected returns, correct reporting rate. The Poisson
+  # kernel rather than dpois(), because expected returns are not integers.
+  g <- list(list(N0      = om$N0,
+                 returns = simulate_group(om, om$N0, om$X_assumed, phi, nmix,
+                                          trip_size = 1, stochastic = FALSE,
+                                          expected = TRUE)))
+  cbind(fit_multi(g, om, mode = mode, nmix = nmix, kernel = TRUE),
+        floored = floor_check(g, om, nmix)$any)
+}, by = .(psi_t, nmix, phi, mode)]
+
+res_suff[, `:=`(rel_bias = F_hat / om$F_true - 1,
+                psi      = mapply(function(ph, nm) psi_of(om, ph, nm),
+                                  phi, nmix))]
+res_suff[, pred := mapply(function(ph, nm) bias_pred(om, ph, nm, om$X_assumed),
+                          phi, nmix)]
+
+# The inversion should be exact, and nothing here should be sitting on a search
+# bound or against the survival floor -- if either happens the numbers below
+# describe the machinery rather than the estimator.
+stopifnot(max(abs(res_suff$psi - res_suff$psi_t)) < 1e-8,
+          !any(res_suff$at_bound))
+```
+
+```{r}
+#| label: exp-d-suff-table
+suff_f1 <- res_suff[mode == "flag1"]
+suff_f0 <- res_suff[mode == "flag0"]
+
+knitr::kable(dcast(suff_f1, psi_t ~ nmix, value.var = "rel_bias"), digits = 3,
+             col.names = c("psi", "nmix = 2", "nmix = 3", "nmix = 4"),
+             caption = paste0(
+               "Structural relative bias in F-hat under tag_flags(i,2) = 1, ",
+               "at a controlled recapture fraction (rows) and mixing length ",
+               "(columns), with the reporting rate correctly specified at ",
+               fnum(om$X_assumed, 2), ". Monte Carlo noise is absent by ",
+               "construction."))
+```
+
+```{r}
+#| label: exp-d-suff-inline
+#| include: false
+suff_sp <- suff_f1[, .(best   = max(rel_bias),          # least negative
+                       worst  = min(rel_bias),          # most negative
+                       spread = max(rel_bias) - min(rel_bias)),
+                   by = psi_t][order(psi_t)]
+
+# Is the ordering the theory predicts -- longer mixing worse at the same psi --
+# present at every target?
+suff_mono <- suff_f1[order(nmix), .(mono = all(diff(rel_bias) < 0)),
+                     by = psi_t][, all(mono)]
+
+suff_top     <- suff_sp[which.max(psi_t)]
+suff_top_psi <- max(suff_sp$psi_t)
+suff_at      <- function(p) suff_sp[abs(psi_t - p) < 1e-9]
+
+# How much of the separation does the analytic predictor account for? It carries
+# the same nmix dependence through N_post, so it should reproduce the ordering;
+# the interesting question is whether it gets the size right.
+suff_pred_sp <- suff_f1[, .(spread = max(pred) - min(pred)), by = psi_t
+                        ][which.max(psi_t), spread]
+
+suff_f0_max <- suff_f0[which.max(abs(rel_bias))]
+
+# TRIPWIRE. The ordering claim -- that a longer mixing period carries a worse
+# bias than a short one at the same psi -- is asserted in the results and
+# guidance sections, and the executive summary quotes bias magnitudes against
+# psi before this chunk runs. Neither can be an inline expression at the point
+# of use, so both are guarded here: if the ordering ever reverses, or the
+# separation at the top of the grid collapses to something an assessment could
+# ignore, the render fails rather than shipping prose that contradicts the
+# results. The margin is deliberately generous -- this is a structural
+# prediction, not a marginal one -- so a trip means something real changed, not
+# that the design drifted. Update the prose and this guard together.
+SUFF_MIN_SPREAD <- 0.02
+
+# The summary also states, before this chunk runs, that the bias reaches half of
+# F or more by psi = 0.5. The guard is set at exactly that mark rather than
+# below it: a guard at 0.48 would pass at 0.485, which is a value the summary's
+# wording does not describe, and a guard that admits states the prose gets wrong
+# is not guarding the prose. The margin is thin -- the shortest mixing length
+# clears half by well under a percentage point -- but the quantity is
+# deterministic, so it will not drift on a tolerance change. A trip means the
+# operating model or the grid moved, which is a reason to reread the summary
+# rather than a reason to loosen the guard.
+SUFF_MIN_TOP <- 0.50
+
+stopifnot(suff_mono,
+          suff_top$spread > SUFF_MIN_SPREAD,
+          abs(suff_top$best) > SUFF_MIN_TOP)
+
+# Reported whether or not the guard trips, so a trip is immediately diagnosable.
+message(sprintf(paste0(
+  "Experiment D sufficiency: monotone = %s; at psi = %.2f the spread is ",
+  "%.4f (guard %.2f) and the smallest bias is %.4f (guard %.2f)"),
+  suff_mono, suff_top_psi, suff_top$spread, SUFF_MIN_SPREAD,
+  abs(suff_top$best), SUFF_MIN_TOP))
+```
+
+$\psi$ is close to sufficient, but it is not sufficient. At every target the
+ordering the theory predicts is present — a longer mixing period carries the
+worse bias at the same recapture fraction — and the separation widens as $\psi$
+does, from `r fpc(suff_at(min(PSI_TARGETS))$spread, 1, signed = FALSE)` at
+$\psi = `r fnum(min(PSI_TARGETS), 2)`$ to
+`r fpc(suff_top$spread, 1, signed = FALSE)` at
+$\psi = `r fnum(suff_top_psi, 2)`$. Against a bias of
+`r fpc(suff_top$worst, 1)` in that worst cell, a spread of that size is second
+order but not negligible: an analyst reading a single number off a $\psi$ curve
+is making an error of roughly
+`r fpc(suff_top$spread / abs(suff_top$worst), 0, signed = FALSE)` of the
+quantity they are estimating, in a known direction.
+
+That the separation exists is not a failure of the theory in
+@sec-why-psi — the predictor carries the same `nmix` dependence through
+$N_{post}$ and reproduces the ordering, giving a spread of
+`r fpc(suff_pred_sp, 1, signed = FALSE)` at the top of the grid against the
+fitted `r fpc(suff_top$spread, 1, signed = FALSE)`. The approximation
+`r if (suff_pred_sp > suff_top$spread) "overstates" else "understates"` the
+effect while getting its sign and ordering right. What fails is the looser
+statement, easy to make from the fitted curve alone, that the bias is a
+function of $\psi$ *simpliciter*. It is a function of $\psi$ and the mixing length, with the
+second term small.
+
+`flag0` is flat across the whole grid, as it must be: with expected returns and
+a correct reporting rate its inversion is exact. Its largest absolute deviation
+anywhere in the design is `r fpc(abs(suff_f0_max$rel_bias), 4, signed = FALSE)`,
+which is the optimiser's tolerance rather than a property of the estimator, and
+it is worth contrasting with the `r fpc(abs(d_f0_max$bias), 1, signed = FALSE)`
+residual in the Monte Carlo design above: that residual is sampling scatter, not
+structure, and this is the run that demonstrates it.
+`r if (any(res_suff$floored)) "Note that the survival floor engaged in at least one cell, so the flag0 benchmark in those cells is not clean." else "The survival floor did not engage anywhere in this design, so the flag0 row is a clean benchmark and the flag1 numbers are attributable to the mixing-period treatment alone."`
+
+## Reading this for a real assessment
+
+The near-collapse onto a single curve is the practical result. `flag1`'s bias is
+not a property of the mixing-period length or of tag availability separately — it
+is largely a function of the recapture fraction those two things produce, and
+that fraction is measurable. For a real release group:
+
+1. Take `tag_flags(i,1)` for that group and sum the *reported returns* within
+   that many periods of release.
+2. Raise by the assumed reporting rate and divide by the number released:
+   $\hat\psi_i \approx (1/X)\sum_{t \le \texttt{tag\_flags}(i,1)} R_{it} / N_i$.
+   The `.tag` file records returns, not recaptures, so omitting the $1/X$
+   returns $X\psi$ — at a reporting rate near 0.5, half the true fraction.
+3. Read the expected downward bias in $F$ off the curve, or evaluate
+   $-(1-X)\psi N_0 / (N_{post} + (1-X)\psi N_0)$ directly. Where the mixing
+   period is long, take the pessimistic end of the range at that $\psi$.
+
+Two caveats travel with $\hat\psi$. The raising uses the same assumed reporting
+rate whose correctness is in question, so $\hat\psi$ inherits that error — and
+inherits it in the unhelpful direction, since a reporting rate that is too high
+understates $\psi$ and therefore understates the bias. And a
+release-group-weighted mean aggregates over groups whose mixing lengths and
+availabilities differ, whereas the figures here apply a single value to a single
+cohort.
+
+At $\psi = 0.05$ the bias is
+`r fpc_range(unlist(suff_at(0.05)[, .(worst, best)]), 1)` and arguably
+tolerable. By $\psi = 0.3$ it is
+`r fpc_range(unlist(suff_at(0.30)[, .(worst, best)]), 1)`, and by
+$\psi = `r fnum(suff_top_psi, 2)`$ it reaches
+`r fpc_range(unlist(suff_top[, .(worst, best)]), 1)`.
+Whether `tag_flags(i,2) = 1` is defensible for a given assessment is therefore
+an empirical question about that assessment's tag data, not a general one — and
+it is a question the assessment team can answer in an afternoon.
+
+`flag0` is far flatter across the same range, but it is not exactly zero: its
+largest absolute median bias is `r fpc(d_f0_max$bias)` at $\psi =
+`r fnum(d_f0_max$psi, 2)`$, and `r nrow(d_f0_sig)` of the `r nrow(d_f0)` cells
+`r if (nrow(d_f0_sig) == 1) "sits" else "sit"` more than two Monte Carlo
+standard errors from zero.
+`r if (!nrow(d_f0_sig)) "No cell is individually distinguishable from zero." else if (nrow(d_f0_sig) == 1L) paste0("That single exception carries a ", if (d_f0_sig$bias > 0) "positive" else "negative", " sign and ", if (d_f0_sig$psi > median(d_f0$psi)) "sits at the high-$\\psi$ end of the design" else "sits in the body of the design", ".") else paste0("The exceptions carry a ", if (all(d_f0_sig$bias > 0)) "positive" else if (all(d_f0_sig$bias < 0)) "negative" else "mixed", " sign and ", if (min(d_f0_sig$psi) > median(d_f0$psi)) "sit at the high-$\\psi$ end of the design" else "are scattered across the design", ".")`
+Whether that residual is Monte Carlo scatter or a real small-sample property of
+inverting a noisy target is what Experiment E asks. Note the direction the
+theory predicts: inverting a noisy target is *convex* in the target, so the
+mechanism, if present, biases $F$ **upward** at small samples.
+
+# Experiment E: release-group size and the noisy-inversion bias
+
+The `flag0` residuals at high $\psi$ have a candidate explanation. The estimator
+inverts an *observed* quantity: it solves for the $F$ that removes
+$R_t / X_{assumed}$ tags. That inversion is a convex function of the target over
+the relevant range, so by Jensen's inequality the expectation of the solved $F$
+exceeds the $F$ that would be solved from the expected target. The size of the
+gap grows with the noise-to-signal ratio of $R_t$, which falls with
+release-group size.
+
+If that is the mechanism, `flag0`'s bias should decline systematically as $N_0$
+rises, holding $\psi$ fixed. It would matter if it did: it would be a *third*
+condition on the default's unbiasedness — adequate release-group size —
+independent of both the reporting rate and the survival floor, and small release
+groups are the realistic case once releases are split by region and quarter.
+
+Three design points are worth stating before the result, because each of them
+determines whether the experiment can detect the effect it is looking for and
+whether the number it reports means what it appears to mean.
+
+**The statistic has to be tail-aware, and the mean alone is not enough.**
+Jensen's inequality is a statement about $E[\hat{F}]$, so the median — close to
+invariant under the monotone convexity being hypothesised — tests the mechanism
+with an instrument largely blind to it. But the mean has a problem of its own
+here. The solved $F$ is unbounded above in principle and bounded in practice
+only by the search interval, so if the effect is carried by a handful of extreme
+replicates, the mean is partly a report on where the interval was placed. Three
+statistics are therefore reported together: the **frequency of gross overshoot**
+(the proportion of replicates returning $\hat{F}$ more than
+`r E_TAIL_MULT`$\times$ the truth), which is the primary statistic because it is
+a bounded frequency and insensitive to the interval as long as the ceiling sits
+well above the threshold; the mean, which is what the convexity argument speaks
+to; and the median, for comparability with the rest of this document.
+
+**The whole design is run at two search intervals.** Every cell is fitted twice,
+once over the interval used everywhere else in this document and once over a
+much wider one. If the reported effect is a property of the estimator, the two
+runs agree. If it is a property of the ceiling, they do not, and the mean is
+then not a quantity worth quoting. This check is reported before the verdict,
+not after it.
+
+**One release group, not four.** `fit_multi` pools groups into a single
+objective, so four groups over four mixing periods averages sixteen independent
+noisy inversions before $\hat{F}$ is formed. That averaging is exactly what the
+large-sample argument says washes the bias out, so pooling suppresses the
+quantity of interest. Experiment E therefore uses a single group, which
+maximises the noise-to-signal ratio available at a given $N_0$.
+
+Recapture fraction is held high — $\psi = `r fnum(psi_of(om, 2.0, 4L), 2)`$,
+toward the upper end of the Experiment D range — because that is where the
+Experiment D residuals appeared. Total tags vary with group size, which affects
+the precision of the estimates but not their expectation; the MCSE columns are
+what to read against.
+
+Runtime note: fitting at two intervals doubles this design, and the replicate
+count is set high because a tail frequency needs more replicates than a mean
+does. Every fit is still one-dimensional, so this remains among the cheaper of
+the five experiments; drop `n_rep_e` for a quick pass, but check the guard
+margin reported at the end of the section before trusting the verdict.
+
+```{r}
+#| label: exp-e-run
+# A tail frequency is a much lower-powered statistic than a mean, so this
+# experiment needs more replicates than a median-based one would. At the tail
+# mass seen here, 200 replicates leaves the difference between the smallest and
+# largest group sizes barely separable from its own Monte Carlo error.
+n_rep_e <- 400
+PHI_E   <- 2.0
+NMIX_E  <- 4L
+G_e     <- 1          # one group: pooling averages away the effect being tested
+
+# The same simulated data are fitted over both intervals, so the two runs are
+# paired and any difference is attributable to the ceiling alone.
+intervals_e <- list(default = LOGF_INT, wide = LOGF_INT_WIDE)
+
+design_e <- CJ(N0_e     = c(125, 250, 500, 2000, 10000),
+               interval = names(intervals_e),
+               rep      = seq_len(n_rep_e), sorted = FALSE)
+design_e[, cell := .GRP, by = .(N0_e)]
+
+res_e <- design_e[, {
+  set.seed(1000L * cell + rep)
+  gs <- lapply(seq_len(G_e), function(g)
+    list(N0 = N0_e,
+         returns = simulate_group(om, N0_e, om$X_assumed, PHI_E, NMIX_E,
+                                  trip_size = 1, stochastic = TRUE)))
+  fit_multi(gs, om, mode = "flag0", nmix = NMIX_E,
+            interval = intervals_e[[interval]])
+}, by = .(rep, cell, N0_e, interval)]
+
+res_e[, `:=`(rel_bias = F_hat / om$F_true - 1,
+             interval = factor(interval, levels = c("default", "wide")))]
+
+# Summary statistics, in the order they should be read: a bounded tail
+# frequency first, then the mean the Jensen argument speaks to, then the
+# median for comparability, then the diagnostic that says whether the mean can
+# be taken at face value.
+summarise_e <- function(d) {
+  d[, .(tail_frac = mean(F_hat > E_TAIL_MULT * om$F_true),
+        tail_mcse = sqrt(mean(F_hat > E_TAIL_MULT * om$F_true) *
+                         (1 - mean(F_hat > E_TAIL_MULT * om$F_true)) / .N),
+        mean_bias = mean(F_hat) / om$F_true - 1,
+        mean_mcse = stats::sd(F_hat) / sqrt(.N) / om$F_true,
+        bias      = median(rel_bias),
+        mcse      = mcse_median(F_hat) / om$F_true,
+        bound_pct = 100 * mean(at_bound),
+        n         = .N), by = .(N0_e)][order(N0_e)]
+}
+
+summ_e      <- summarise_e(res_e[interval == "default"])
+summ_e_wide <- summarise_e(res_e[interval == "wide"])
+
+knitr::kable(
+  summ_e[, .(N0_e, tail_frac, tail_mcse, mean_bias, mean_mcse,
+             bias, mcse, bound_pct, n)],
+  digits = 4,
+  col.names = c("Tags per group", paste0("P(F-hat > ", E_TAIL_MULT, "x truth)"),
+                "MCSE (tail)", "Mean rel. bias", "MCSE (mean)",
+                "Median rel. bias", "MCSE (median)", "% at bound", "n"),
+  caption = paste0("flag0 against release-group size, at psi = ",
+                   round(psi_of(om, PHI_E, NMIX_E), 3),
+                   " (phi = ", PHI_E, ", nmix = ", NMIX_E,
+                   ", one release group), over the default search interval."))
+```
+
+The final two columns are the ones to read first. `% at bound` is the proportion
+of replicates whose estimate is sitting on an endpoint of the search interval;
+where it is non-zero, the mean in that row is partly a statement about where the
+endpoint was put. The comparison against the wider interval below is what
+settles whether it matters.
+
+```{r}
+#| label: exp-e-stability
+stab_e <- merge(
+  summ_e[,      .(N0_e, tail_d = tail_frac, mean_d = mean_bias,
+                  med_d = bias, bound_d = bound_pct, mcse_d = mean_mcse)],
+  summ_e_wide[, .(N0_e, tail_w = tail_frac, mean_w = mean_bias,
+                  med_w = bias, bound_w = bound_pct, mcse_w = mean_mcse)],
+  by = "N0_e")
+
+knitr::kable(
+  stab_e[, .(N0_e, tail_d, tail_w, mean_d, mean_w, med_d, med_w,
+             bound_d, bound_w)],
+  digits = 4,
+  col.names = c("Tags per group", "Tail (default)", "Tail (wide)",
+                "Mean (default)", "Mean (wide)", "Median (default)",
+                "Median (wide)", "% bound (default)", "% bound (wide)"),
+  caption = paste0("The same design fitted over the default search interval ",
+                   "and over a much wider one. Statistics that move between ",
+                   "the two columns are properties of the ceiling rather than ",
+                   "of the estimator."))
+```
+
+```{r}
+#| label: exp-e-stability-inline
+#| include: false
+e_bound_any    <- summ_e[, max(bound_pct)]
+e_bound_small  <- summ_e[which.min(N0_e), bound_pct]
+
+# Does the mean survive widening the interval? Compare at the smallest group
+# size, which is where the effect lives, against the joint MCSE of the two runs.
+e_s_d <- stab_e[which.min(N0_e)]
+e_mean_shift <- e_s_d$mean_w - e_s_d$mean_d
+e_mean_shift_mcse <- sqrt(e_s_d$mcse_d^2 + e_s_d$mcse_w^2)
+e_mean_stable <- abs(e_mean_shift) <= 2 * e_mean_shift_mcse
+
+# The tail frequency should be essentially identical across intervals, since
+# the threshold sits well below either ceiling.
+e_tail_shift <- e_s_d$tail_w - e_s_d$tail_d
+```
+
+`r if (e_bound_any == 0) paste0("No replicate in this design returned an estimate on the boundary of the default search interval, at any group size. The mean is therefore not being truncated, and the two interval runs should and do agree.") else paste0("Boundary contact is not negligible: at the smallest group size ", fnum(e_bound_small, 1), "% of replicates return an estimate sitting on an endpoint of the default interval. The mean at that cell is therefore a censored quantity, and the wide-interval column is the one to read.")`
+Widening the interval moves the mean at the smallest group size by
+`r fpc(e_mean_shift, 1)`, against a joint Monte Carlo standard error of
+`r fpc(e_mean_shift_mcse, 1, signed = FALSE)`, so the mean
+`r if (e_mean_stable) "is stable to the choice of ceiling" else "is **not** stable to the choice of ceiling and should not be quoted as a bias estimate"`.
+The gross-overshoot frequency moves by `r fpc(e_tail_shift, 1)` — as it should,
+since the threshold of `r E_TAIL_MULT`$\times$ the truth lies far below either
+ceiling — which is why it is the statistic carried into the summary sections.
+
+```{r}
+#| label: exp-e-plot
+#| fig-height: 6.5
+#| fig-cap: "flag0 against release-group size, with two Monte Carlo standard errors and free y scales. The reporting rate is correct and the survival floor is not engaging, so any departure from zero is attributable to release-group size alone. The top panel is the frequency of gross overshoot, which is a bounded proportion and insensitive to the search interval; the mean and median are shown separately below it because the effect appears in the tail frequency and the mean while the median is uninformative about it, which is the signature of a tail effect rather than a shift."
+# Three statistics on a shared x axis, free y scales, so the tail frequency is
+# not squashed by the scale of the mean. One ggplot rather than a stacked
+# layout, to avoid a package dependency the rest of the document does not have.
+e_panel <- rbind(
+  summ_e[, .(N0_e, stat = paste0("P(F-hat > ", E_TAIL_MULT, "x truth)"),
+             val = tail_frac, mcse = tail_mcse)],
+  summ_e[, .(N0_e, stat = "Mean relative bias",
+             val = mean_bias, mcse = mean_mcse)],
+  summ_e[, .(N0_e, stat = "Median relative bias",
+             val = bias, mcse = mcse)])
+
+e_panel[, stat := factor(stat, levels = c(
+  paste0("P(F-hat > ", E_TAIL_MULT, "x truth)"),
+  "Mean relative bias", "Median relative bias"))]
+
+ggplot(e_panel, aes(N0_e, val)) +
+  geom_hline(yintercept = 0, linetype = 2, colour = "grey40") +
+  geom_linerange(aes(ymin = val - 2 * mcse, ymax = val + 2 * mcse),
+                 alpha = 0.7, colour = pal[["flag0"]]) +
+  geom_line(linewidth = 0.7, colour = pal[["flag0"]]) +
+  geom_point(size = 2.2, colour = pal[["flag0"]]) +
+  facet_wrap(~ stat, ncol = 1, scales = "free_y") +
+  # Break at the design points rather than at decade-ish defaults, which label
+  # values the design never visits and leave the smallest group on the panel
+  # edge.
+  scale_x_log10(breaks = sort(unique(e_panel$N0_e)),
+                labels = scales::comma,
+                expand = expansion(mult = 0.07)) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Tags per release group (log scale)", y = NULL)
+```
+
+```{r}
+#| label: exp-e-inline
+#| include: false
+e_small <- summ_e[which.min(N0_e)]
+e_large <- summ_e[which.max(N0_e)]
+
+# PRIMARY TEST: the gross-overshoot frequency, which is a bounded proportion
+# and insensitive to the search ceiling. Two-sided, so that "no effect" and
+# "the opposite of the predicted effect" are distinguishable.
+e_tail_gap      <- e_small$tail_frac - e_large$tail_frac
+e_tail_gap_mcse <- sqrt(e_small$tail_mcse^2 + e_large$tail_mcse^2)
+e_resolved      <- abs(e_tail_gap) > 2 * e_tail_gap_mcse
+e_direction     <- if (e_tail_gap > 0) "the direction the convexity argument predicts" else
+                                       "the opposite direction to the one predicted"
+
+# SECONDARY: the same test on the mean, retained because it is the quantity
+# Jensen's inequality speaks to -- but only interpretable if e_mean_stable.
+e_gap      <- e_small$mean_bias - e_large$mean_bias
+e_gap_mcse <- sqrt(e_small$mean_mcse^2 + e_large$mean_mcse^2)
+e_mean_resolved <- abs(e_gap) > 2 * e_gap_mcse
+
+e_trend_tail <- summ_e[, cor(log(N0_e), tail_frac)]
+e_trend_mean <- summ_e[, cor(log(N0_e), mean_bias)]
+e_trend_med  <- summ_e[, cor(log(N0_e), bias)]
+
+# Smallest tail-frequency difference this design could have resolved.
+e_mde <- 2 * e_tail_gap_mcse
+
+# How many replicates does the overshoot frequency at the smallest cell
+# correspond to? Quoting the count keeps the reader's sense of scale honest.
+e_small_n_tail <- round(e_small$tail_frac * e_small$n)
+
+# Is the median at the smallest group size distinguishable from zero at all?
+# At the tail mass this design produces it is not, and quoting it as a bare
+# number invites a reader to treat a quantity with an MCSE several times its
+# own size as an estimate of central bias. The point being made is that the
+# median is blind to the effect, which is stronger stated as a null than as a
+# number. Every site that mentions the median uses `e_med_phrase`, so the
+# document cannot end up asserting resolution in one section and denying it in
+# another. The executive summary states the same thing in words before this
+# chunk runs; the guard below fails the render if that ever stops being true.
+e_med_resolved <- abs(e_small$bias) > 2 * e_small$mcse
+# Two forms of the same statement. The long one carries the figures and is used
+# once, at first mention; the short one is used at every later site, because
+# five repetitions of the same parenthesis in as many pages reads as though the
+# document has lost track of what it has already said. Both branch on the same
+# test, so they cannot disagree.
+e_med_phrase   <- if (e_med_resolved) {
+  paste0("sits at ", fpc(e_small$bias, 1))
+} else {
+  paste0("is not distinguishable from zero (", fpc(e_small$bias, 1),
+         ", against a Monte Carlo standard error of ",
+         fpc(e_small$mcse, 1, signed = FALSE), ")")
+}
+e_med_phrase_short <- if (e_med_resolved) {
+  paste0("sits at ", fpc(e_small$bias, 1))
+} else {
+  "is not distinguishable from zero"
+}
+```
+
+At `r e_small$N0_e` tags per group, `r fpc(e_small$tail_frac, 1, signed = FALSE)`
+of replicates — `r e_small_n_tail` of `r e_small$n` — return an estimate of $F$
+more than `r E_TAIL_MULT` times the truth; at
+`r format(e_large$N0_e, big.mark = ",")` the figure is
+`r fpc(e_large$tail_frac, 1, signed = FALSE)`. The difference is
+`r fpc(e_tail_gap, 1)` against a joint Monte Carlo standard error of
+`r fpc(e_tail_gap_mcse, 1, signed = FALSE)`, so the two ends of the design are
+`r if (e_resolved) "separated by more than two joint standard errors" else "not separated by two joint standard errors"`.
+The corresponding difference in the mean is `r fpc(e_gap, 1)` against a joint
+standard error of `r fpc(e_gap_mcse, 1, signed = FALSE)`, which
+`r if (e_mean_resolved) "is also resolved" else "is not resolved"`
+`r if (e_mean_stable) "and, per the interval check above, is not an artefact of the ceiling" else "-- but per the interval check above it moves when the ceiling moves, so it is reported for completeness rather than as a bias estimate"`.
+
+Across the design the correlation with $\log N_0$ is `r fnum(e_trend_tail, 2)`
+on the overshoot frequency and `r fnum(e_trend_mean, 2)` on the mean. The median
+behaves differently — its correlation is `r fnum(e_trend_med, 2)` — but the
+median at the smallest group size `r e_med_phrase`, so it carries no information
+about the effect in either direction. **The honest reading is that the median is
+blind to this effect, not that it contradicts it.** That is what the mechanism
+predicts. A convex inversion applied to a noisier target moves probability mass
+into the right tail; it does not shift the bulk of the distribution the same
+way, so the centre stays where it was while the mean is dragged upward by the
+minority of groups that report many returns during mixing. Any diagnostic that
+looks only at the middle of the distribution will see nothing at all, when what
+is actually happening is a heavy right tail.
+
+```{r}
+#| label: exp-e-verdict
+#| include: false
+# One verdict string, three branches, so the prose is a single paragraph
+# whichever way the result falls.
+e_verdict <- if (e_resolved && e_tail_gap > 0) {
+  paste0("**The effect is resolved, and it runs in ", e_direction, ".** ",
+         "That makes release-group size a third condition on the default's ",
+         "unbiasedness, independent of the reporting rate and the survival ",
+         "floor: the deterministic inversion is unbiased in the large-sample ",
+         "limit, not in general. The form the failure takes is a tail rather ",
+         "than a shift -- at ", e_small$N0_e, " tags per group roughly one ",
+         "release group in ", fnum(1 / max(e_small$tail_frac, 1e-9), 0),
+         " returns an estimate more than ", E_TAIL_MULT, " times the truth, ",
+         "while the median at that cell ", e_med_phrase_short, " -- ",
+         "so assessments built from many small release groups should not ",
+         "expect the Experiment B robustness result to hold at face value, ",
+         "and should not expect a median-based diagnostic to warn them.")
+} else if (e_resolved) {
+  paste0("**The difference is resolved, but it runs in ", e_direction, ".** ",
+         "The convexity argument predicts more mass in the upper tail at ",
+         "small samples, so this is not confirmation of that mechanism and ",
+         "should not be reported as one. Some other small-sample property of ",
+         "the inversion is operating, and this design does not identify it.")
+} else {
+  paste0("**This is an underpowered null, not evidence of absence.** The ",
+         "design resolves a difference of about ",
+         fpc(e_mde, 1, signed = FALSE), " in overshoot frequency between the ",
+         "smallest and largest group sizes, and the convexity effect at these ",
+         "sample sizes may well be smaller than that. What can be said is ",
+         "that no group-size effect large enough to matter for an assessment ",
+         "showed up, and that the Experiment D residuals are consistent with ",
+         "Monte Carlo scatter. The mechanism remains plausible on theoretical ",
+         "grounds and is not ruled out here.")
+}
+
+# The executive summary states a fixed NUMBER of conditions on flag0's
+# unbiasedness, and it renders before this chunk runs, so it cannot be an
+# inline expression. This is the guard: if Experiment E ever stops resolving an
+# upward effect, the render fails here rather than shipping a summary that
+# contradicts the results section. Update EXEC_CONDITIONS and the summary
+# together.
+#
+# The guard is tied to the gross-overshoot frequency rather than to the mean,
+# because the mean can move with the search interval and a tripwire that can be
+# tripped by a change of ceiling is not a tripwire worth having.
+EXEC_CONDITIONS <- 3L
+stopifnot(
+  "Executive summary claims a third condition that Experiment E no longer supports." =
+    (EXEC_CONDITIONS == 3L) == (e_resolved && e_tail_gap > 0),
+  # The summary also asserts, before this chunk runs, that the median is
+  # uninformative about the tail effect. If the median ever becomes
+  # distinguishable from zero the summary is wrong, and the results and
+  # guidance sections will quote a number the summary has dismissed.
+  "Executive summary calls the median uninformative, but it is now resolved." =
+    !e_med_resolved)
+
+# Reported whether or not the guard trips, so that a trip is immediately
+# diagnosable: a margin below 1 means the design failed to resolve the effect
+# and the fix is more replicates, not a rewrite of the executive summary.
+message(sprintf(
+  "Experiment E guard: tail gap %.4f, joint MCSE %.4f, margin %.2f (needs > 1)",
+  e_tail_gap, e_tail_gap_mcse, e_tail_gap / (2 * e_tail_gap_mcse)))
+
+# Follow-on paragraph. If the effect resolved, the interesting fact is that it
+# lives in the tail; if it did not, the interesting fact is what would resolve
+# it. Either way the extension pointer is the same.
+e_lever <- paste0(
+  "The obvious lever is the assumed reporting rate: at fixed $N_0$, a lower ",
+  "$X_{assumed}$ thins $R_t$ directly and inflates the divisor, attacking ",
+  "both sides of the ratio at once. That is listed under ",
+  "[Suggested extensions] rather than run here, because the low-$X$ region is ",
+  "also where the survival floor engages, and separating the two mechanisms ",
+  "needs a design that holds the floor inactive by construction.")
+
+e_next <- if (e_resolved && e_tail_gap > 0) {
+  paste0("The three statistics have to be read together, and none of them is ",
+         "sufficient alone. At ", e_small$N0_e, " tags per group the median ",
+         e_med_phrase_short, ", the mean is ",
+         fpc(e_small$mean_bias, 1),
+         if (e_mean_stable) "" else
+           " (interval-sensitive, and quoted here only for completeness)",
+         ", and the overshoot frequency is ",
+         fpc(e_small$tail_frac, 1, signed = FALSE), ". A single small release ",
+         "group can therefore look unremarkable on a median-based diagnostic ",
+         "while contributing a large upward pull to a pooled estimate. The ",
+         "mean overstates the typical group, the median conceals the tail ",
+         "entirely, and the frequency is the statistic that says what a reader ",
+         "of a real assessment should actually expect to encounter: not that ",
+         "every small group is biased, but that some fraction of them are ",
+         "badly so. ", e_lever)
+} else {
+  paste0("Locating an effect this small needs a design that pushes the ",
+         "noise-to-signal ratio harder than release-group size can on its ",
+         "own. ", e_lever)
+}
+
+# Limitations bullet, which has to describe either a resolved effect or a
+# bounded null depending on how the experiment came out.
+e_limit <- if (e_resolved && e_tail_gap > 0) {
+  paste0("**Experiment E resolves a difference, not a curve, and the mean it ",
+         "reports is not a bias correction.** The design separates the ",
+         "smallest and largest release-group sizes by ",
+         fpc(abs(e_tail_gap), 1, signed = FALSE), " in overshoot frequency, ",
+         "against a joint Monte Carlo standard error of ",
+         fpc(e_tail_gap_mcse, 1, signed = FALSE),
+         ", which establishes that group size matters but does not pin down ",
+         "the functional form between the two ends. The mean at the smallest ",
+         "group size is driven by a small number of extreme replicates and ",
+         "carries a large standard error of its own (",
+         fpc(e_small$mean_mcse, 1, signed = FALSE), "); ",
+         if (e_mean_stable)
+           paste0("it is stable to a large widening of the search interval, ",
+                  "but it remains a statistic about a tail and should be read ",
+                  "as evidence of one rather than as a number to subtract off ",
+                  "an assessment. ")
+         else
+           paste0("it also moves when the search interval is widened, so it ",
+                  "is partly a property of where the upper bound on F was ",
+                  "placed and should not be quoted as a bias estimate at all. "),
+         "The solved F is unbounded above in principle, so any mean of it is ",
+         "conditional on a bound imposed by the analyst -- which is a general ",
+         "property of the deterministic inversion, not an artefact of this ",
+         "simulation. Release-group size also varies total tags alongside ",
+         "group size, so precision varies across the design, which is why ",
+         "every statistic is reported with its own Monte Carlo standard error.")
+} else {
+  paste0("**Experiment E is underpowered for the effect it tests.** The ",
+         "design resolves a difference of roughly ",
+         fpc(e_mde, 1, signed = FALSE), " in overshoot frequency between the ",
+         "smallest and largest release-group sizes, and the convexity effect ",
+         "at these sample sizes may be smaller than that. It uses a single ",
+         "release group rather than a pooled set, and reports a tail ",
+         "frequency and a mean alongside the median, all of which give the ",
+         "mechanism a better chance of showing than a pooled median would; it ",
+         "does not follow that a null result rules the mechanism out. ",
+         "Release-group size also varies total tags alongside group size, so ",
+         "precision varies across the design, which is why every statistic is ",
+         "reported with its own Monte Carlo standard error.")
+}
+
+# Checklist item, likewise.
+e_check <- if (e_resolved && e_tail_gap > 0) {
+  paste0("The default inverts a noisy observation, and that inversion is ",
+         "convex in the observation, so small release groups put weight in ",
+         "the upper tail of $F$ that the large-sample argument does not ",
+         "predict. At ", e_small$N0_e, " tags per group, ",
+         fpc(e_small$tail_frac, 1, signed = FALSE), " of release groups ",
+         "return an estimate more than ", E_TAIL_MULT, " times the truth with ",
+         "the reporting rate correct and the floor inactive, against ",
+         fpc(e_large$tail_frac, 1, signed = FALSE), " at ",
+         format(e_large$N0_e, big.mark = ","), ". Note that the median at the ",
+         "small-group cell ", e_med_phrase_short, ": the cost is a heavy ",
+         "right tail across release groups, not a shift every group shares, ",
+         "so it will not show up in a diagnostic built on medians. Count the ",
+         "releases per group in the `.tag` file and check how much of the ",
+         "tagging data sits in groups of a few hundred.")
+} else {
+  paste0("The default inverts a noisy observation, and that inversion is ",
+         "convex in the observation, so small release groups are a candidate ",
+         "source of upward bias in $F$ independent of the reporting rate and ",
+         "the floor. Experiment E did not resolve such an effect, but it was ",
+         "not powered to exclude one of a few percent, so group sizes are ",
+         "still worth reporting alongside the other two conditions.")
+}
+```
+
+`r e_verdict`
+
+`r e_next`
+
+Note that this experiment isolates group size from the survival floor — the
+reporting rate is correct, so the raised target is correct on average and the
+floor is not the operative mechanism. In a real configuration the two run
+together, and small groups make floor engagement more likely as well.
+
+# What the results show
+
+```{r}
+#| label: results-inline
+#| include: false
+r_f0_eq   <- summ_b[case == "true = assumed" & mode == "flag0", max(abs(rel_bias))]
+r_f1_eq   <- summ_b[case == "true = assumed" & mode == "flag1", min(rel_bias)]
+r_c_bad   <- summ_c[mode == "flag0" & X_assumed == 0.20 & phi == 2, min(med)]
+
+# flag0 vs forward across Experiment B, by phi.
+gap_b <- dcast(summ_b[mode %in% c("flag0", "forward")],
+               nmix + phi + case ~ mode, value.var = "rel_bias")
+gap_b[, gap := abs(flag0 - forward)]
+g_lo   <- gap_b[phi == 0.5, max(gap)]
+g_lo_o <- gap_b[phi == 0.5 & case != "true > assumed", max(gap)]
+g_hi   <- gap_b[which.max(gap)]
+
+# forward_X accuracy across the 27 cells.
+fx_b <- summ_b[mode == "forward_X"]
+fx_n4 <- sum(abs(fx_b$rel_bias) <= 0.04)
+fx_thr <- ceiling(1000 * max(abs(fx_b$rel_bias[abs(fx_b$rel_bias) <=
+             sort(abs(fx_b$rel_bias), decreasing = TRUE)[2]]))) / 10
+fx_worst <- fx_b[order(-abs(rel_bias))][1:2]
+
+# nmix escalation at phi = 2, true > assumed.
+esc <- dcast(summ_b[phi == 2 & case == "true > assumed" &
+                      mode %in% c("flag0", "forward", "forward_X")],
+             nmix ~ mode, value.var = "rel_bias")[order(nmix)]
+```
+
+**1. When the assumed reporting rate is right, `flag0` is unbiased and `flag1`
+is not — and this holds across the whole Experiment B configuration space.**
+`flag0` recovers $F$ regardless of $\varphi$ and `nmix` (largest absolute median
+bias `r fpc(r_f0_eq, 1, signed = FALSE)`), because the deterministic inversion
+never needs to know how available tagged fish were. `flag1` asserts $X = 1$
+during mixing, which is false for every tagging programme ever run; its bias in
+$F$ is downward, meaning biomass biased *upward*, reaching `r fpc(r_f1_eq)` in
+the worst cell, and it worsens steeply as either the mixing period lengthens or
+tagged fish become more vulnerable. `tag_flags(i,2) = 1` is a robustness choice,
+not a correctness fix, and it errs optimistically.
+
+Experiments C and E qualify this heavily. The unbiasedness of `flag0` survives a
+reporting rate that is correct only on average rather than group by group, and it
+survives clumped reporting *provided the survival floor does not engage*. Where
+it does — low assumed reporting rates, high availability — `flag0`'s median bias
+reaches `r fpc(r_c_bad)`, because a capped removal is an under-removal and
+under-removal is `flag1`'s error. `r if (e_resolved && e_tail_gap > 0) "Experiment E adds a third condition: the result is a large-sample one, and it degrades at realistic release-group sizes." else "Experiment E looked for a third condition -- a small-sample bias from inverting a noisy target -- and did not resolve one, though it was not powered to rule out a small effect. On current evidence the two conditions above are the operative ones."`
+The claim that the default is unbiased holds only inside a region of
+configuration space, and that region shrinks as assumed reporting rates fall.
+
+**2. The reporting rate, not the flag, is the first-order channel — except at
+high availability.** The `forward` estimator handles mixing correctly but keeps
+$X$ fixed at the wrong value, so the gap between it and `flag0` measures what the
+mixing treatment contributes over and above the reporting-rate error. Across the
+low-availability part of the design that gap is small: at $\varphi = 0.5$ it
+never exceeds `r fpc(g_lo, 1, signed = FALSE)`, and outside the
+`true > assumed` column it never exceeds `r fpc(g_lo_o, 1, signed = FALSE)`. A
+wrong reporting rate rescales every predicted return in the *informative* periods
+too, not just the mixing ones, and that channel dominates.
+
+The exception matters. The largest gap in the design is
+`r fpc(g_hi$gap, 0, signed = FALSE)`, at $\varphi = `r g_hi$phi`$,
+`nmix = `r g_hi$nmix``, `r as.character(g_hi$case)` — `r fpc(g_hi$flag0)` for
+`flag0` against `r fpc(g_hi$forward)` for `forward`. Where tagged fish are highly
+available during a long mixing period, the deterministic removal stops being a
+second-order correction and becomes a large error in its own right. So the flag
+is not *always* the minor channel; it is minor in the regime the mixing period
+was designed for ($\varphi < 1$) and major in the regime that is arguably more
+realistic for purse-seine tagging. Experiment C shows the same boundary in a
+different coordinate: the gap is negligible where the floor is inactive and
+first-order where it is not. Attributing a biomass shift entirely to the flag
+will not survive a sensitivity run, but nor will dismissing it without knowing
+where in $\varphi$ the fishery sits.
+
+**3. The two flag settings form a one-sided interval and cannot bracket the
+truth when the assumed reporting rate is too high.** Because $X_{assumed} < 1$,
+`flag0` always removes more tags than `flag1` and always returns the larger
+$\hat{F}$; the interval therefore has `flag0` as its upper end. It can only
+contain the truth when `flag0` sits above it, which happens only when the true
+reporting rate is at or above the assumed value. Across the entire 27-cell
+design, bracketing
+`r if (brk_lt == 0) "never occurs in any replicate" else paste0("occurs in at most ", fnum(brk_lt, 0), "% of replicates")`
+whenever the true rate is below the assumed one. Where bracketing does occur it is either
+degenerate (`true = assumed`, where `flag0` is simply unbiased and noise straddles
+the truth roughly half the time) or genuine but extremely wide (high $\varphi$,
+`true > assumed`, intervals up to `r fnum(w_max, 1)` times $F$).
+
+**Implication for grid design:** running `tag_flags(i,2)` at 0 and 1 as
+alternative levels spans an assumption; it does not bound the truth, and the
+direction in which it fails to bound depends on the sign of the reporting-rate
+error — which is exactly the thing under dispute. If the real uncertainty is in
+the reporting rate, that is what belongs on the grid.
+
+**4. Longer mixing periods amplify a reporting-rate error under every estimator
+except `forward_X`.** This is a correction to an expectation worth stating
+explicitly, because the intuition that "the forward model turns excluded data
+into information, so longer mixing should help" is not what the simulation shows.
+At $\varphi = 2$ with the rate underestimated, `flag0` runs
+`r fpc(esc$flag0[1])` → `r fpc(esc$flag0[nrow(esc)])` as `nmix` goes 2 → 4. But
+`forward` degrades too (`r fpc(esc$forward[1])` → `r fpc(esc$forward[nrow(esc)])`
+over the same range), because fixing $X$ at the wrong value contaminates the
+extra mixing-period observations just as it contaminates the post-mixing ones.
+Adding data does not help when the added data are being scored against a
+misspecified nuisance parameter.
+
+Only `forward_X`, which lets $X$ move, is flat in `nmix`
+(`r fpc(esc$forward_X[1])` → `r fpc(esc$forward_X[nrow(esc)])`). The lesson is
+that handling the mixing period as a likelihood is necessary but not sufficient;
+the benefit only materialises when the reporting rate is estimable. Any
+sensitivity to `tag_flags(i,1)` in a real assessment should be read as partly a
+reporting-rate sensitivity in disguise.
+
+**5. Only estimating the reporting rate fixes the misspecification.**
+`forward_X` recovers $F$ to within `r fnum(fx_thr, 1)`% in 26 of the 27 cells of
+Experiment B — `r fx_n4` of 27 at a 4% threshold — and recovers $\varphi$ at all
+three values tested. The two largest residuals are
+`r paste(sprintf("%s (nmix = %s, phi = %s, %s)", fpc(fx_worst$rel_bias, 1), fx_worst$nmix, fx_worst$phi, as.character(fx_worst$case)), collapse = " and ")`,
+each within `r fnum(max(abs(fx_worst$rel_bias) / fx_worst$mcse), 1)` Monte Carlo
+standard errors of zero, against a typical MCSE for this estimator of
+`r fpc(median(fx_b$mcse), 1, signed = FALSE)` — `forward_X` is much the noisiest
+of the four, so its worst cells are where noise would be expected to show.
+The structural reason it works at all is that under
+`flag0` and `flag1` the reporting rate deterministically rewrites the tagged
+population and the data have no mechanism to object; under the forward
+parameterisation the mixing-period returns become evidence about $X$ rather than
+an instruction. Note the caveat in the Limitations: this vignette identifies $X$
+far more cleanly than MULTIFAN-CL could.
+
+**6. The default's failure mode is real, and it is triggered by low assumed
+reporting rates in combination with high availability, not by uncertainty in the
+rate.** The floor engages when the realised catch fraction in a mixing period
+exceeds $(1-\tau)X_{assumed}$, about `r fnum(1 - CUT - FRINGE, 2)` times the
+assumed rate under MULTIFAN-CL defaults — a fifth easier to reach than the
+exhaustion condition $C_t/N_t > X_{assumed}$ that the obvious reading of the
+manual suggests. At an assumed rate of 0.5 with $\varphi = 1$ that is not reached
+in this design; at 0.5 with $\varphi = 2$ it is reached in
+`r fpp_range(ro_hi_p2)` of replicates, and at 0.2 with
+$\varphi = 2$ in `r fpp_range(ro_lo_hi)`.
+
+Trip-level clumping *amplifies* this but is not required for it. Small release
+groups and stochastic recaptures are sufficient on their own: with trips taking
+only 1% of a release group — effectively independent reporting — the floor still
+engages in `r fnum(ro_trip_lo$pct[1], 0)`% of replicates at
+$X_{assumed} = 0.2$, $\varphi = 1$, and `r fnum(ro_fine_p2, 0)`% at
+$\varphi = 2$. This matters for how the result is defended: clumping is the
+ingredient an unsympathetic reader will call contrived, and the finding does not
+depend on it. An assessment that revises its tag-seeding estimates downward moves
+itself into this regime without changing anything else.
+
+**7. Under floor engagement, the default degenerates into the alternative.**
+Where the floor rarely engages, clumped reporting costs `flag0` precision but not
+accuracy — the median stays within
+`r fpc(max(abs(c_f0_safe$med)), 0, signed = FALSE)` while the interquartile range
+roughly `r if (max(c_f0_safe$iqr) / min(c_f0_safe$iqr) > 2.5) "triples" else "doubles"`.
+Where it routinely engages, `flag0` loses accuracy too, and in the same direction
+as `flag1`: once `posfun` caps the removal the default cannot remove the number
+of tags its own rule demands, so it under-removes and $F$ is biased downward
+(median `r fpc(r_c_bad)` at $X_{assumed} = 0.2$, $\varphi = 2$). The practical
+consequence is that the two settings are not as different as they look in the
+regime where the choice matters most. Neither behaviour would be visible in
+standard assessment diagnostics, which is an argument for checking the floor
+condition directly rather than inferring it from fit statistics.
+
+**8. `flag1`'s bias is a function of one measurable quantity.** The mixing-period
+recapture fraction $\psi$ collapses $\varphi$ and `nmix` onto a single axis, and
+the analytic approximation $-(1-X)\psi N_0 / (N_{post} + (1-X)\psi N_0)$ tracks
+the simulation closely (correlation `r fnum(d_cor, 3)`). This makes the question
+empirical rather than general: compute $\psi$ from the `.tag` file and the
+expected downward bias in $F$ follows — a few percent at $\psi = 0.05$, roughly a
+third of $F$ at $\psi = 0.3$, more than half at $\psi = 0.5$.
+
+**9. The likelihood-based treatment is not free.** `forward_X` recovers $F$ and
+$X$ cleanly in Experiments A and B, where one release group of 10,000 tags
+carries the information. In Experiment C's more realistic configuration — eight
+groups of 500 — it is the widest of the four estimators in
+`r fnum(100 * c_fx_widest, 0)`% of cells and its median wanders over
+`r fpc_range(c_fx$med)`. Structural correctness does not substitute for
+information: estimating the reporting rate, the availability multiplier and $F$
+together needs data that a fragmented tagging programme may not provide. This
+tempers the recommendation in point 5, and it is a reason to treat a code change
+as a medium-term improvement rather than a fix available to the current
+assessment.
+
+`r if (e_resolved && e_tail_gap > 0) paste0("**10. Release-group size is a structural assumption.** Experiment E shows the default's unbiasedness is a large-sample property: inverting a noisy target is convex in the target, so small release groups put weight in the upper tail of F even when the reporting rate is correct and the floor is inactive. At ", e_small$N0_e, " tags per group, ", fpc(e_small$tail_frac, 1, signed = FALSE), " of groups return an estimate more than ", E_TAIL_MULT, " times the truth, against ", fpc(e_large$tail_frac, 1, signed = FALSE), " at ", format(e_large$N0_e, big.mark = ","), ", while the median at the small-group cell ", e_med_phrase_short, ". The failure is a tail, not a shift, which is why it is invisible to the diagnostics an assessment normally reports. Release-group size is not usually treated as an assumption worth stating; on this evidence it is one.") else "**10. Release-group size was tested and did not turn up as a third condition.** The convexity of the deterministic inversion predicts extra weight in the upper tail of F at small release-group sizes, independent of the reporting rate and the floor. Experiment E did not resolve one, using a tail frequency and a mean alongside the median and a single release group so as to give the mechanism the best chance of showing. This is a bounded null rather than a clean negative, but it means the two conditions in point 1 are the ones to check in practice, and release-group size need not be added to them."`
+
+# What to check in an assessment that fits to tags
+
+This is the practical residue of the five experiments, in the order it is worth
+working through. It sits here rather than in the executive summary because every
+figure it refers to has been produced by the time it renders, so the numbers
+below are read from the fitted objects rather than transcribed.
+
+**1. Which setting was used, and whether it was held constant.**
+`tag_flags(i,2)` was inert in MULTIFAN-CL until version 2.2.7.6 (July 2025), so
+any comparison against an earlier assessment involves a model change rather than
+a like-for-like retrospective. "They used the default" describes the behaviour
+correctly but not a decision anyone made — the alternative did not exist. A
+change of setting between a draft and a final model would move biomass in a
+predictable direction and should be documented as a structural choice, not a bug
+fix.
+
+**2. The assumed reporting rates, and the direction of any revision.** This is
+the first-order channel through most of the design: at $\varphi = 0.5$ the gap
+between the deterministic treatment and a correctly specified forward model
+never exceeds `r fpc(g_lo, 1, signed = FALSE)`. A downward revision of
+tag-seeding estimates raises inferred $F$ and lowers biomass through the
+ordinary likelihood, *and* separately pushes the model toward the regime where
+the default breaks down. The two effects compound and are easily conflated. The
+exception is high availability during a long mixing period, where the flag
+becomes a first-order channel in its own right (largest gap in the design
+`r fpc(g_hi$gap, 0, signed = FALSE)`, at $\varphi = `r g_hi$phi`$,
+`nmix = `r g_hi$nmix``). For the 2026 bigeye assessment the values and the
+direction of revision are both documented: SC22-SA-IP-05 gives purse seine
+reporting-rate priors with means of 0.496 in region 2, 0.512 in region 3 and
+0.528 in region 4, each between 15 and 24 per cent below what the 2023
+assessments would have used under the same region and fishery definitions, with
+the reduction driven largely by the introduction of double-tag effects. Read
+those as penalty distributions rather than fixed values — the model estimates
+the rate against them — and note that they cover purse seine fleets only, that
+the region 2 penalty was deliberately halved to reflect additional uncertainty,
+and that the region 2 prior is not recommended for the Indonesian and Philippine
+domestic fisheries.
+
+**3. Whether the survival floor is engaging.** The floor engages when the
+realised catch fraction in a mixing period exceeds $(1-\tau)X_{assumed}$, about
+`r fnum(1 - CUT - FRINGE, 2)` times the assumed rate under MULTIFAN-CL defaults
+— that is `r fnum((1 - CUT - FRINGE) * 0.5, 3)` at an assumed rate of 0.5 and
+`r fnum((1 - CUT - FRINGE) * 0.2, 3)` at 0.2, which ordinary fishing mortalities
+reach. When it happens, `posfun` silently caps the removal and the default then
+**under-removes**, biasing $F$ downward and biomass upward — the same direction
+as the alternative it is supposed to improve on. In MULTIFAN-CL the floor is set
+by `age_flags(118)` and `(119)`, with a penalty weighted by
+`age_flags(117)/1e8`; if `age_flags(117) < 0` the penalty weight is zero and the
+rescaling leaves no trace in the objective function at all. Check
+`age_flags(117)`, `(118)` and `(119)`, and check whether `age_flags(198)`
+(release-group-specific reporting rates) is active, which makes the divisor vary
+by group.
+
+**4. The mixing-period recapture fraction $\psi$.** For `tag_flags(i,2) = 1` the
+downward bias in $F$ is largely governed by this one measurable quantity: the
+proportion of each release group *recaptured* within `tag_flags(i,1)` periods of
+release. The `.tag` file records reported returns rather than recaptures, so the
+returns have to be raised before dividing:
+
+$$\hat\psi_i \;\approx\; \frac{1}{X} \cdot
+  \frac{\sum_{t \le \texttt{tag\_flags}(i,1)} R_{it}}{N_i}.$$
+
+Omitting the $1/X$ returns $X\psi$ rather than $\psi$, which at a reporting rate
+near 0.5 halves the diagnosed fraction — and because the bias steepens with
+$\psi$, it understates the consequence by more than half again. Then read the
+bias off Experiment D or evaluate
+$-(1-X)\psi N_0 / (N_{post} + (1-X)\psi N_0)$ directly:
+`r fpc_range(unlist(suff_at(0.05)[, .(worst, best)]), 1)` at $\psi = 0.05$;
+`r fpc_range(unlist(suff_at(0.30)[, .(worst, best)]), 1)` at $\psi = 0.3$;
+`r fpc_range(unlist(suff_top[, .(worst, best)]), 1)` at
+$\psi = `r fnum(suff_top_psi, 2)`$. Each range is printed worst-first, and
+because a longer mixing period carries the worse bias at a given $\psi$ — the
+ordering the Experiment D tripwire guards — the worst end is the longest mixing
+length. Take that end where `tag_flags(i,1)` is large. Two caveats:
+$\hat\psi$ inherits any error in the reporting rate it is raised by, in the
+direction that understates the problem; and a
+release-group-weighted mean aggregates over groups whose mixing lengths differ.
+This is an afternoon's work against the `.tag` file and it turns a
+general argument into a specific one about that assessment's data.
+
+**5. The size of the release groups.** `r e_check`
+
+**6. Whether the flag appears as a grid axis, and how it is described.** Running
+both settings spans an assumption; it does not bound the truth. The pair is
+structurally one-sided — the default always returns the larger $F$ — so it can
+never bracket when the assumed reporting rate is too high, and where it does
+bracket the interval reaches `r fnum(w_max, 1)` times the quantity being
+estimated. If the real uncertainty is in the reporting rate, that is what
+belongs on the grid.
+
+# Guidance on `tag_flags(i,2)`
+
+Neither setting of `tag_flags(i,2)` is correct, and the choice between them
+should be made and reported as a conditional one.
+
+Simulation testing shows that the default, `tag_flags(i,2) = 0`, recovers fishing
+mortality without appreciable bias when the assumed tag reporting rate is
+correct, across all combinations of mixing-period length (2–4 quarters) and
+tagged-fish availability ($\varphi$ = 0.5–2) tested in Experiment B. That
+robustness is structural: the deterministic inversion solves for whatever
+mixing-period fishing mortality reproduces the implied removal, so it does not
+require the availability of tagged fish during mixing to be correctly specified.
+
+It is, however, conditional on further requirements, and the claim should not be
+extended past the design in which it was demonstrated. Where the realised catch
+fraction in a mixing period exceeds roughly four-fifths of the assumed reporting
+rate, the raised removal drives the tagged population below the survival floor,
+the floor engages, and the default then under-removes — biasing fishing mortality
+downward by as much as `r fpc(abs(r_c_bad), 0, signed = FALSE)` in our tests.
+This condition is reached routinely at assumed reporting rates around 0.2, and at
+0.5 whenever tagged fish are substantially more available during mixing than the
+general population. The default's reliability therefore declines precisely as
+reporting-rate estimates are revised downward — and they are being revised
+downward. The purse seine reporting-rate priors for bigeye in SC22-SA-IP-05 have
+means of 0.496 to 0.528 across regions 2 to 4, between 15 and 24 per cent below
+the values the 2023 assessments would have used under the same region and
+fishery definitions. The 2026 bigeye assessment therefore sits at the boundary
+of this condition, not safely inside it, and a further revision of the magnitude
+just observed would move it across.
+`r if (e_resolved && e_tail_gap > 0) paste0("Separately, the result is a large-sample one: at ", e_small$N0_e, " tags per release group, ", fpc(e_small$tail_frac, 1, signed = FALSE), " of release groups return an estimate of fishing mortality more than ", E_TAIL_MULT, " times the truth even with a correct reporting rate and an inactive floor, while the median at the same cell ", e_med_phrase_short, ". The cost is a heavy right tail across release groups rather than a shift each group shares, so it is invisible to a median-based check and it does not average away as quickly as pooling suggests.") else "Release-group size was tested as a possible third condition and did not emerge as one, though the test does not exclude a small effect."`
+
+The alternative, `tag_flags(i,2) = 1`, assumes complete reporting during the
+mixing period. This is not true of any tagging programme, and the resulting bias
+is systematic rather than conservative: fishing mortality is underestimated and
+biomass correspondingly overestimated, with the error growing as either the
+mixing period lengthens or tagged fish become more available. Under plausible
+configurations the bias in fishing mortality reached
+`r fpc(abs(r_f1_eq), 0, signed = FALSE)`. Its one merit is predictability — the
+bias is largely a function of the proportion of each release group recaptured
+during the mixing period, which is computable from the `.tag` file in advance
+provided the reported returns are raised by the assumed reporting rate first.
+The qualifier matters in both directions: the recapture fraction does not
+determine the bias entirely, since at a fixed fraction a longer mixing period is
+worse by `r fpc(suff_top$spread, 1, signed = FALSE)` at the top of the range
+tested; and an analyst who forgets the raising will diagnose half the fraction
+and conclude the setting is far cheaper than it is.
+
+On balance the default remains preferable where reporting rates are moderate,
+tagged-fish availability during mixing is not elevated, the survival floor is
+demonstrably not engaging`r if (e_resolved && e_tail_gap > 0) ", and release groups are large enough for the large-sample argument to apply" else ""`.
+`r if (e_resolved && e_tail_gap > 0) "All four conditions" else "All three conditions"`
+should be checked and reported rather than assumed. Neither setting protects
+against misspecification of the reporting rate itself, which is the larger error
+channel in most cases examined;
+the two settings do not bracket the truth and should not be used as alternative
+levels in a structural uncertainty grid. Where reporting rates are uncertain,
+that uncertainty should be represented directly.
+
+The treatment that would resolve the dilemma rather than manage it is to predict
+mixing-period returns and score them in the likelihood, with the reporting rate
+estimated against its tag-seeding prior. MULTIFAN-CL cannot currently do this —
+mixing-period returns do not enter the tag likelihood under either setting — so
+it is a request to the MULTIFAN-CL development team rather than something an
+assessment can configure. We recommend it as a medium-term change, with the
+caveat that the simulation here also shows it is not free: with many small
+release groups it was the least precise of the four estimators tested, under a
+prior looser than any assessment would impose.
+
+Because both settings are biased and the choice is unavoidable in any model
+fitted to tags, we further recommend that a configuration omitting tagging data —
+with spatial structure carried by a fleets-as-areas approach — be included in the
+structural uncertainty grid. This bounds the influence of the tag data on stock
+status without requiring the mixing-period treatment to be resolved first, and it
+answers a question of direct management relevance: how much of the assessment
+result depends on the tagging programme. This recommendation follows from the
+demonstrated deficiencies of both flag settings rather than from any simulation
+of a spatial model, which is outside the scope of this vignette.
+
+# Limitations
+
+This is a deliberately stripped-down operating model and it flatters the forward
+model in ways a real assessment would not.
+
+- **The number of tags released is known exactly**, and there is no abundance,
+  selectivity, movement, or catchability to confound with the reporting rate.
+  Identification of $X$ here is far stronger than in MULTIFAN-CL, where $X$
+  trades off against $q$ and against absolute abundance. The extent to which
+  `forward_X` rescues a bad prior is therefore optimistic, and the prior
+  standard deviation (0.4 on the log scale) is loose. Tightening it toward a
+  hard tag-seeding constraint moves `forward_X` back toward `forward`.
+- **$\varphi$ is a single scalar applied uniformly across the mixing period.**
+  In reality availability presumably decays smoothly from release, and varies by
+  fishery. A step function is the simplest possible caricature.
+- **No spatial structure.** The reason a mixing period exists at all is that
+  effort is not randomly distributed relative to release sites; that spatial
+  process is represented here only through its effect on $\varphi$.
+- **Observation error.** Experiments A, B, D and E use unclumped reporting;
+  Experiment C adds trip-level clumping but the likelihood remains Poisson,
+  whereas MULTIFAN-CL offers negative binomial and binned options via
+  `parest_flags(111)`. Fitting a likelihood matched to the clumping would narrow
+  the dispersion penalty seen in Experiment C.
+- **The `posfun` analogue is approximate, and its penalty does no work.** The
+  smooth floor and quadratic penalty reproduce the qualitative behaviour of
+  `do_newton_raphson_for_tags()` — catch capped, survival floored — but it is not
+  a transcription of the MULTIFAN-CL code, and the weight is set by hand rather
+  than derived from `age_flags(117)`. More importantly, because the mixing target
+  depends only on the data and not on any parameter, the penalty is constant with
+  respect to the parameter vector and cannot influence $\hat{F}$. That makes this
+  vignette a faithful model of the `age_flags(117) < 0` case specifically. A
+  configuration with a positive penalty weight might behave differently, and
+  nothing here tests that.
+- **Clumping is modelled as a single trip size.** Real reporting varies by
+  fleet, and a mixture of well-reporting and non-reporting fleets would behave
+  differently from a homogeneous trip process with the same mean. At the coarsest
+  trip setting the realised number of trips per release group per period falls to
+  a handful, so that corner of the design should be read as an extreme rather
+  than as a typical fishery.
+- **The forward estimators are not tuned for the Experiment C sample size.**
+  `forward_X` estimates three parameters from eight groups of 500 tags under a
+  loose prior; its poor performance there reflects that configuration rather than
+  a defect of the parameterisation. A tighter prior, more release groups, or
+  fewer free parameters would all improve it, and this vignette does not locate
+  the boundary.
+- **Experiment C fixes the mixing length at `nmix = 3`.** Experiment B's claim of
+  robustness across mixing lengths is therefore not re-tested under the realistic
+  observation model.
+- `r e_limit`
+- **No spatial or fleets-as-areas configuration is simulated.** The
+  recommendation to include a tag-free branch in a structural uncertainty grid
+  follows from the demonstrated deficiencies of both flag settings, not from any
+  result in this document.
+- **$\psi$ is treated as known.** In practice it would be estimated from
+  observed recaptures, which are themselves thinned by the reporting rate, so a
+  real calculation would need to raise them — reintroducing some of the
+  uncertainty the exercise is trying to characterise.
+
+# Suggested extensions
+
+- Replace the Poisson observation model with a negative binomial and estimate the
+  dispersion, to see how much of the contrast survives realistic overdispersion.
+- Let $\varphi$ decay geometrically with quarters at liberty rather than
+  switching off at `nmix`, and estimate the decay rate. This is closer to the
+  biology and would show whether `tag_flags(i,1)` needs to be a sharp boundary
+  at all.
+- Add multiple release cohorts with $\varphi$ grouped by quarter at liberty —
+  the structure that makes $\varphi$ identifiable in a real model, and worth
+  demonstrating before proposing it to the developers.
+- **Sweep the prior standard deviation on $X$ in `forward_X`, and treat this as
+  the highest-value outstanding run in this list.** The value used throughout is
+  0.4 on the log scale. The penalty parameters in SC22-SA-IP-05 imply
+  coefficients of variation on the bigeye purse seine reporting rate of roughly
+  0.05 to 0.09 — close to an order of magnitude tighter than the prior imposed
+  here. `forward_X` was the least precise estimator tested in this document, and
+  that finding is one of the reasons given for treating a likelihood-based
+  treatment as a medium-term development request rather than a current option.
+  Until the sweep is run it is not possible to say how much of the imprecision
+  is intrinsic to the estimator and how much is an artefact of a prior far
+  looser than any assessment would impose. The sweep would also locate where the
+  ability to revise the reporting rate is lost, which is the other half of the
+  trade-off.
+- Fit with `nmix` misspecified relative to the truth, since in practice the
+  analyst chooses `tag_flags(i,1)` without knowing the real mixing time.
+- Add a `forward` variant with $\varphi$ fixed at 1. The current
+  `flag0`–`forward` gap conflates two changes — scoring the mixing-period returns
+  in the likelihood, and adding a free availability parameter — so it does not
+  cleanly isolate the mixing channel.
+- Give the survival-floor penalty something to act on, by making the mixing-period
+  target depend on an estimated quantity, and check whether a positive
+  `age_flags(117)` changes the Experiment C conclusions.
+- **Establish what bounds the solved $F$ in MULTIFAN-CL.** In this vignette the
+  deterministic inversion is unbounded above and is held in check by an explicit
+  search interval, which is why every tail statistic here is reported against a
+  boundary-contact diagnostic. A real implementation has its own effective bound —
+  through parameter bounds on $F$, through the survival floor, or through the
+  Newton solver's own failure behaviour — and which of these binds first
+  determines what an extreme release group actually does to an assessment.
+  Reading that out of the code would say whether the tail found in Experiment E
+  is realised as a large $\hat{F}$, as a floored removal, or as a convergence
+  failure the analyst would notice.
+- Vary `nmix` within Experiment C, to test whether Experiment B's robustness
+  across mixing lengths survives the realistic observation model.
+- **Push the noise-to-signal ratio through $X_{assumed}$ as well as through
+  release-group size**, to separate the two routes into the same mechanism. A
+  lower assumed rate thins $R_t$ and inflates the divisor simultaneously, so it
+  attacks the ratio harder than $N_0$ can alone, and it is the axis a real
+  assessment moves along when seeding estimates are revised. The complication is
+  that the low-$X$ region is also where the survival floor engages, so the design
+  would need to hold the floor inactive by construction — a large $N_0$ with a
+  low $\varphi$, or the floor disabled outright — to attribute any effect to the
+  inversion rather than to the cap. Done properly this would also pin down the
+  functional form that Experiment E establishes the existence of but does not
+  resolve.
+- Raise the replicate count in Experiment E and add intermediate group sizes.
+  The present design establishes that the two ends differ but leaves the shape
+  between them unresolved, and a tail frequency is an inherently noisy statistic:
+  its Monte Carlo error scales as $n^{-1/2}$, so halving the resolvable
+  difference from the present `r fpc(e_mde, 1, signed = FALSE)` costs four times
+  the replicates. That is affordable here, since the flag modes are
+  one-dimensional, and it is what would turn the third condition from a
+  qualitative warning into something an analyst could calibrate against their own
+  release-group sizes.
+
+# Session information
+
+```{r}
+#| label: session
+sessionInfo()
+```

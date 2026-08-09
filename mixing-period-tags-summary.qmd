@@ -1,0 +1,459 @@
+---
+title: "The mixing-period tag treatment in the 2026 WCPO bigeye assessment"
+subtitle: "What `tag_flags(i,2)` can and cannot do, read against `bet.tag` and the fitted reporting rates"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    code-fold: true
+    code-tools: true
+    df-print: kable
+params:
+  source_mode: "remote_cache"
+  tag_path: null
+  par_path: null
+  cache_dir: "inputs/cache"
+  refresh_inputs: false
+  source_ref: "8c2a586a8c5abec1a76e305f28f8f0b48fe2fe27"
+---
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      collapse = TRUE, comment = "#>")
+
+if (!exists("params")) {
+  params <- list(source_mode = "remote_cache", tag_path = NULL, par_path = NULL,
+                 cache_dir = "inputs/cache", refresh_inputs = FALSE,
+                 source_ref = "8c2a586a8c5abec1a76e305f28f8f0b48fe2fe27")
+}
+
+repo_raw_url <- function(ref, path) {
+  paste0("https://raw.githubusercontent.com/PacificCommunity/",
+         "ofp-sam-bet-2026-diagnostic/", ref, "/", path)
+}
+
+acquire_input <- function(name, remote_path, local_path = NULL) {
+  if (!is.null(local_path) && nzchar(local_path)) {
+    if (!file.exists(local_path)) stop("Local override does not exist: ", local_path)
+    return(list(path = normalizePath(local_path), source = "local override"))
+  }
+  if (!identical(params$source_mode, "remote_cache")) {
+    stop("source_mode must be 'remote_cache' unless an explicit local path is supplied")
+  }
+
+  cache_path <- file.path(params$cache_dir, params$source_ref, name)
+  if (isTRUE(params$refresh_inputs) || !file.exists(cache_path)) {
+    dir.create(dirname(cache_path), recursive = TRUE, showWarnings = FALSE)
+    temporary_path <- paste0(cache_path, ".download")
+    unlink(temporary_path)
+    status <- tryCatch(
+      download.file(repo_raw_url(params$source_ref, remote_path), temporary_path,
+                    mode = "wb", quiet = TRUE),
+      error = function(error) error
+    )
+    if (inherits(status, "error") || !identical(status, 0L) ||
+        !file.exists(temporary_path) || file.info(temporary_path)$size == 0) {
+      unlink(temporary_path)
+      stop("Could not download ", remote_path, " at ref ", params$source_ref,
+           ". Re-render after restoring network access or provide an explicit local path.")
+    }
+    backup_path <- paste0(cache_path, ".previous")
+    unlink(backup_path)
+    if (file.exists(cache_path) && !file.rename(cache_path, backup_path)) {
+      unlink(temporary_path)
+      stop("Could not preserve existing cached input: ", cache_path)
+    }
+    if (!file.rename(temporary_path, cache_path)) {
+      if (file.exists(backup_path)) file.rename(backup_path, cache_path)
+      unlink(temporary_path)
+      stop("Could not move downloaded input into cache: ", cache_path)
+    }
+    unlink(backup_path)
+    return(list(path = normalizePath(cache_path), source = "downloaded"))
+  }
+  list(path = normalizePath(cache_path), source = "cache")
+}
+
+input_files <- list(
+  tag = acquire_input("bet.tag", "model/bet.tag", params$tag_path),
+  par = acquire_input("final.par", "results/reference/final.par", params$par_path)
+)
+stopifnot(file.exists(input_files$tag$path), file.exists(input_files$par$path))
+
+# Formatting helpers, matching the conventions of the companion simulation study.
+fpc  <- function(x, d = 1) sprintf(paste0("%.", d, "f%%"), 100 * x)
+fnum <- function(x) formatC(x, big.mark = ",", format = "d")
+```
+
+::: {.callout-note}
+## Scope
+
+This note is an executive summary of a methodological problem in the 2026 bigeye
+diagnostic model: the treatment of tag recaptures during the mixing period, controlled
+by `tag_flags(i,2)`. It computes, directly from `bet.tag` and the model's flag settings,
+the two quantities that govern the problem — the share of recapture data excluded from
+the likelihood, and the mixing-period recapture fraction $\hat\psi$ raised by the fitted
+fishery-specific reporting rates — and reads them against a companion simulation study
+(*Mixing-period tag recaptures in MULTIFAN-CL*, v11) whose results are quoted with
+provenance, not re-derived.
+
+Everything computed here is parsed inline from the `.tag` and fitted `.par` inputs;
+everything quoted from the simulation study or reported from the assessment's
+uncertainty grid is labelled as such. The recommendation at the end — a mixing-period
+likelihood as the resolution, and a tag-free fleets-as-areas configuration as the
+practical bound — follows from the demonstrated deficiencies of both flag settings, not
+from any simulation of a spatial model, which no document in this series performs.
+:::
+
+::: {.callout-note}
+## Input provenance
+
+Model inputs are pinned to
+[`ofp-sam-bet-2026-diagnostic`](https://github.com/PacificCommunity/ofp-sam-bet-2026-diagnostic)
+commit `r params$source_ref`. The tag file was resolved from
+`r input_files$tag$source` at `r input_files$tag$path`; the fitted parameter file was
+resolved from `r input_files$par$source` at `r input_files$par$path`.
+
+When no local overrides are supplied, the document reads
+`model/bet.tag` and `results/reference/final.par` from the pinned GitHub revision and
+caches them under `r params$cache_dir`.
+:::
+
+::: {.callout-warning}
+## Disclaimer: use of AI assistance
+
+This note was prepared with the assistance of a large language model (Anthropic Claude).
+The model parsed `bet.tag`, transcribed the flag settings and the `tag fish rep`
+reporting-rate matrix from the supplied diagnostic `.par`, computed the diagnostics, and
+drafted the text.
+
+Output produced this way requires independent verification, and the document is
+structured so that verification is possible rather than requiring trust:
+
+- all computation is shown inline and runs in base R with no package dependencies;
+- structural tripwires (`stopifnot`) check the parse against the file's own recovery
+  header before any result is used, so a parsing failure halts the render rather than
+  producing wrong numbers;
+- the R implementation mirrors an independently written and executed implementation;
+  any divergence between the two will surface as a tripwire failure or as numbers
+  differing from the companion diagnostic note (v2), which reports the same quantities;
+- the per-group appendix permits any single row to be checked by hand against the
+  `.tag` file in a few minutes;
+- every value quoted from the simulation study is attributed to it, and every value
+  reported from the assessment's uncertainty grid is labelled as reported, not verified.
+
+The inputs are read from a pinned upstream model revision or explicit local overrides.
+The parser's section and dimension tripwires should still be checked before relying on
+the document. Conclusions and recommendations are the responsibility of the author,
+not of the tool.
+:::
+
+```{r constants}
+#| code-summary: "Parse fitted tag settings and define quoted comparison inputs"
+
+read_numeric_section <- function(path, marker, n_columns) {
+  lines <- gsub("\r$", "", readLines(path, warn = FALSE))
+  marker_at <- grep(paste0("^#\\s*", marker, "\\s*$"), lines,
+                    ignore.case = TRUE)
+  if (length(marker_at) != 1) stop("Expected one '# ", marker, "' section in ", path)
+  next_marker <- grep("^#", lines[(marker_at + 1):length(lines)])[1]
+  end_at <- if (is.na(next_marker)) length(lines) else marker_at + next_marker - 1
+  rows <- trimws(lines[(marker_at + 1):end_at])
+  rows <- rows[nzchar(rows)]
+  fields <- strsplit(rows, "\\s+")
+  if (!length(fields) || any(lengths(fields) != n_columns)) {
+    stop("Malformed '# ", marker, "' section in ", path)
+  }
+  values <- suppressWarnings(as.numeric(unlist(fields, use.names = FALSE)))
+  if (anyNA(values)) stop("Non-numeric value in '# ", marker, "' section in ", path)
+  matrix(values, ncol = n_columns, byrow = TRUE)
+}
+
+tag_flags <- read_numeric_section(input_files$par$path, "tag flags", 10)
+RR <- read_numeric_section(input_files$par$path, "tag fish rep", 33)
+nmix <- tag_flags[, 1]
+
+stopifnot(
+  nrow(tag_flags) == 98,
+  nrow(RR) >= 98,
+  length(nmix) == 98,
+  all(tag_flags[, 2] == 1),
+  ncol(RR) == 33
+)
+
+RR <- RR[seq_len(98), , drop = FALSE]
+
+# Regional seeding-prior means (SC22-SA-IP-05, purse seine), used only for comparison.
+X_reg <- c(`1` = 0.5, `2` = 0.496, `3` = 0.512, `4` = 0.528, `5` = 0.5)
+
+# --- Quoted from the companion simulation study (v11 fitted objects), not re-derived. ---
+sim <- list(
+  expD = data.frame(psi  = c(0.05, 0.30, 0.50),                    # Experiment D:
+                    best = c(-0.039, -0.277, -0.509),              # bias in mixing-period F
+                    worst= c(-0.048, -0.334, -0.599)),             # worst end = longest mixing
+  floor_tau   = 0.22,     # survival floor; engages when removal fraction > 1 - tau = 0.78
+  expE_N      = 125,      # Experiment E small-group design point
+  expE_tail   = 0.060,    # share of groups with F-hat > 5x truth at that size
+  expE_tail_big = 0.000,  # the same at 10,000 tags per group
+  flag_gap_max  = 0.63)   # largest flag0-vs-truth gap in design (phi = 2, nmix = 4)
+```
+
+```{r parse}
+#| code-summary: "Parse bet.tag (base R) with structural tripwires"
+
+lines <- gsub("\r$", "", readLines(input_files$tag$path))
+
+hdr <- as.integer(strsplit(trimws(lines[2]), "\\s+")[[1]])
+n_groups <- hdr[1]; n_bins <- hdr[3]
+stopifnot(n_groups == 98)
+
+rec_hdr_at <- grep("^# TAG RECOVERIES", lines)[1]
+totals <- as.integer(strsplit(trimws(lines[rec_hdr_at + 2]), "\\s+")[[1]])
+stopifnot(length(totals) == n_groups)
+
+blk <- grep("^#\\s+[0-9]+\\s+-\\s+RELEASE REGION", lines)
+stopifnot(length(blk) == n_groups)
+ends <- c(blk[-1] - 1, length(lines))
+
+groups <- vector("list", n_groups)
+recs   <- vector("list", n_groups)
+for (g in seq_len(n_groups)) {
+  seg  <- lines[blk[g]:ends[g]]
+  prog <- tail(strsplit(trimws(seg[1]), "\\s+")[[1]], 1)
+  body <- seg[-1]
+  keep <- !grepl("^\\s*#", body) & nzchar(trimws(body))
+  body <- trimws(body[keep])
+  relh <- as.integer(strsplit(body[1], "\\s+")[[1]])          # region, year, month
+  rel  <- as.numeric(strsplit(body[2], "\\s+")[[1]])
+  stopifnot(length(rel) == n_bins)
+  rmat <- if (length(body) > 2) {
+    do.call(rbind, lapply(strsplit(body[-(1:2)], "\\s+"), as.integer))
+  } else matrix(integer(0), 0, 5)
+  stopifnot(nrow(rmat) == totals[g])   # header row counts recovery records per group
+  q <- if (nrow(rmat)) ((rmat[, 3] - relh[2]) * 12 + (rmat[, 4] - relh[3])) %/% 3L
+       else integer(0)
+  stopifnot(all(q >= 0), all(((rmat[, 3] - relh[2]) * 12 + (rmat[, 4] - relh[3])) %% 3 == 0))
+  groups[[g]] <- data.frame(gid = g, prog = prog, region = relh[1], year = relh[2],
+                            N = sum(rel))
+  recs[[g]]   <- if (nrow(rmat)) data.frame(gid = g, q = q, fishery = rmat[, 2],
+                                            n = rmat[, 5]) else NULL
+}
+grp <- do.call(rbind, groups)
+rec <- do.call(rbind, recs)
+stopifnot(identical(grp$prog, c(rep("RTTP", 15), rep("PTTP", 46), rep("JPTP", 37))))
+stopifnot(n_groups == nrow(tag_flags), all(rec$fishery >= 1),
+          all(rec$fishery <= ncol(RR)))
+
+grp$nmix <- nmix
+rec$rate <- RR[cbind(rec$gid, rec$fishery)]
+rec$mix  <- rec$q < grp$nmix[rec$gid]
+
+N_tot <- sum(grp$N); R_tot <- sum(rec$n)
+# Note: the recovery header row counts records, not tags; it is checked per group above.
+```
+
+```{r compute}
+#| code-summary: "The two governing quantities"
+
+# 1. Share of recapture data excluded from the likelihood by the mixing windows.
+R_mix   <- sum(rec$n[rec$mix])
+mix_share <- R_mix / R_tot
+
+# 2. psi-hat per group: mixing returns raised by the fitted rate of the reporting
+#    fishery (zero-rate returns flagged and excluded), divided by adjusted releases.
+zero_mix <- sum(rec$n[rec$mix & rec$rate == 0])
+raised <- with(rec[rec$mix & rec$rate > 0, ], tapply(n / rate, gid, sum))
+grp$Rmix <- as.integer(with(rec[rec$mix, , drop = FALSE],
+                            tapply(n, factor(gid, levels = 1:98), sum)))
+grp$Rmix[is.na(grp$Rmix)] <- 0L
+grp$psi <- 0; grp$psi[as.integer(names(raised))] <- raised
+grp$psi <- grp$psi / grp$N
+grp$psi_reg <- grp$Rmix / (X_reg[as.character(grp$region)] * grp$N)
+grp$R <- with(rec, tapply(n, factor(gid, levels = 1:98), sum)); grp$R[is.na(grp$R)] <- 0
+
+w_psi     <- sum(pmin(grp$psi, 1)     * grp$N) / N_tot
+w_psi_reg <- sum(pmin(grp$psi_reg, 1) * grp$N) / N_tot
+w_by_prog <- sapply(split(grp, grp$prog), function(d)
+  sum(pmin(d$psi, 1) * d$N) / sum(d$N))
+
+hi <- grp$psi >= 0.30
+rec_hi <- sum(grp$R[hi]) / R_tot
+
+# Switching flag=1 -> flag=0: extra raised removals by rate band.
+band <- cut(rec$rate, c(-1, 0, 0.4, 0.95, 1.01),
+            labels = c("zero-rate", "longline 0.16-0.26", "purse seine 0.46-0.84",
+                       "JP coastal 0.99"))
+extra <- with(rec[rec$mix & rec$rate > 0, ],
+              tapply(n / rate - n, band[rec$mix & rec$rate > 0], sum))
+extra[is.na(extra)] <- 0
+
+# Counterfactual flag=0 floor margins under fitted rates and configured windows.
+floor_util <- sapply(seq_len(98), function(g) {
+  d <- rec[rec$gid == g & rec$mix & rec$rate > 0, , drop = FALSE]
+  N <- grp$N[g]; u <- 0
+  for (t in 0:(max(grp$nmix[g], 1) - 1)) {
+    rt <- sum(d$n[d$q == t] / d$rate[d$q == t])
+    if (N <= 0) return(Inf)
+    u <- max(u, (rt / N) / (1 - sim$floor_tau)); N <- N - rt
+  }
+  u
+})
+n_floor <- sum(floor_util >= 1)
+```
+
+# Summary {#sec-summary}
+
+**Two structural facts frame everything.** First, under the configured mixing windows,
+`r fnum(R_mix)` of the `r fnum(R_tot)` reported recaptures in `bet.tag` —
+**`r fpc(mix_share)` of the tagging data** — never enter the likelihood. Under either
+setting of `tag_flags(i,2)`, those returns fix the tagged population state
+deterministically, with full authority and no uncertainty attached, and contribute
+nothing to parameter estimation. Second, the removal that fixes that state depends
+entirely on what is assumed about reporting rates during mixing, and the model's own
+fitted `tag fish rep` matrix says those rates are far from uniform: near-complete
+(0.99) for the Japanese coastal fisheries that dominate JPTP returns, roughly one half
+(0.46--0.50) for the main purse-seine fisheries that dominate PTTP and RTTP returns,
+and 0.16--0.26 for longline.
+
+**The configured setting, `tag_flags(i,2) = 1`, removes reported mixing-period returns
+at face value — equivalent to assuming complete reporting — and its cost falls almost
+entirely on the purse-seine programmes.** By the model's own fitted rates the
+assumption is nearly true for JPTP (weighted $\hat\psi$ = `r round(w_by_prog["JPTP"], 3)`;
+`r fpc(sum(rec$n[rec$mix & rec$fishery %in% c(12,13) & grp$prog[rec$gid] == "JPTP"]) / sum(rec$n[rec$mix & grp$prog[rec$gid] == "JPTP"]), 0)`
+of JPTP mixing returns come from the 0.99-rate fisheries) and substantially false for
+RTTP (`r round(w_by_prog["RTTP"], 3)`) and PTTP (`r round(w_by_prog["PTTP"], 3)`), where
+roughly a third to a half of true mixing recaptures are never removed. The companion
+study's Experiment D maps $\hat\psi$ to the downward bias in mixing-period $F$:
+`r fpc(abs(sim$expD$best[1]), 1)`--`r fpc(abs(sim$expD$worst[1]), 1)` at $\psi$ = 0.05,
+`r fpc(abs(sim$expD$best[2]), 1)`--`r fpc(abs(sim$expD$worst[2]), 1)` at 0.3, and
+`r fpc(abs(sim$expD$best[3]), 1)`--`r fpc(abs(sim$expD$worst[3]), 1)` at 0.5, the worse
+end at longer mixing. `r sum(hi)` release groups sit at $\hat\psi \ge 0.3$, carrying
+`r fpc(rec_hi, 0)` of the reported recaptures. The bias is systematic — $F$ low, scale
+high, every group the same direction — and its one merit is that it is predictable in
+advance from exactly this calculation.
+
+**The alternative, `tag_flags(i,2) = 0`, raises returns by the assumed rate before
+removal, and is unbiased only under conditions this file does not fully meet.** Its
+accuracy moves one-for-one with the reporting rates, which are the quantity under
+dispute, weakly informed for longline, and being revised downward. Its inversion is
+convex in a noisy observation, so small release groups put weight in the upper tail of
+$F$: at the study's `r sim$expE_N`-tag design point, `r fpc(sim$expE_tail, 1)` of
+simulated groups returned estimates more than five times the truth with everything else
+correct, invisible to median-based diagnostics — and `r sum(grp$N <= sim$expE_N)` of the
+98 groups here are that small or smaller. The oft-cited floor pathology, by contrast,
+largely dissolves under the fitted rates: re-evaluated with fishery-specific raising and
+the configured windows, `r n_floor` group(s) breach the survival-floor condition, not
+the six that regional-mean raising suggests. And the switch is surgically targeted:
+moving to raised removals adds `r fnum(round(sum(extra[c("purse seine 0.46-0.84","longline 0.16-0.26")])))`
+tags to the purse-seine and longline removals — where the face-value bias lives — while
+changing JPTP by `r fnum(round(extra["JP coastal 0.99"]))` tags in total.
+
+**Running both settings as levels of the uncertainty grid does not bound the problem.**
+The pair is structurally one-sided: because the assumed rate is below one wherever it
+matters, the raised treatment always removes more tags and always returns the larger
+$F$. Two grid levels therefore span an assumption without bracketing the truth — they
+cannot contain it at all when the assumed rate is too high — and, because one level
+carries a documented directional bias, averaging them functions as a fifty per cent
+weighting on that bias, not as an uncertainty representation.
+
+**This is not academic: the choice reportedly flips the status determination.** With
+both settings in the grid, the ensemble indicates the stock is not overfished and not
+undergoing overfishing; restricted to `tag_flags(i,2) = 0`, it indicates overfished and
+about as likely as not undergoing overfishing. Those ensemble results are reported here,
+not verified, but their direction is exactly what the $\hat\psi$ analysis predicts, and
+the guidance against the grid axis was fixed before the ensemble outcome was known.
+The honest statement of status is therefore not either determination — it is that the
+determination currently turns on a model component that is biased under both of its
+available settings.
+
+**The resolution and the way forward are different things.** The resolution is a
+mixing-period likelihood: predict mixing-period returns, score them against
+observations, and estimate the reporting rate against its tag-seeding prior — putting
+`r fpc(mix_share, 0)` of the tag data back into estimation and inverting nothing. The
+companion study implements this (`forward_X`) and it recovers $F$ under the
+misspecification that biases both flag settings; MULTIFAN-CL cannot currently do it, so
+it is a redevelopment request, not a configuration, and the study also shows it is not
+free with many small release groups. Until it exists, the most defensible way forward is
+to bound the component rather than tune it: include a tag-free configuration, with
+spatial structure carried by a fleets-as-areas approach, in the structural uncertainty
+grid. Given that the status determination demonstrably moves with the tag treatment, the
+question that configuration answers — how much of the assessment result depends on the
+tagging data at all — is now the question managers most need answered.
+
+# The $\hat\psi$ table {#sec-psi}
+
+$\hat\psi_i$ raises each mixing-window return by the fitted rate of the fishery that
+reported it, then divides by the correction-adjusted release count. Omitting the raising
+returns $X\psi$ rather than $\psi$ — roughly half the diagnosed fraction at purse-seine
+rates, and because the bias steepens in $\psi$, less than half the diagnosed
+consequence. `r fnum(zero_mix)` mixing returns come from a fishery whose fitted rate is
+zero and cannot be raised at all; they are excluded, which understates $\hat\psi$ for
+the affected groups, and the inconsistency should be resolved regardless of the flag
+choice.
+
+```{r psi-table}
+#| echo: false
+cls <- cut(grp$psi, c(-1, 0.05, 0.30, 0.50, Inf),
+           labels = c("< 0.05", "0.05\u20130.30", "0.30\u20130.50", "\u2265 0.50"))
+tab <- data.frame(
+  `psi class` = levels(cls),
+  Groups = as.integer(table(cls)),
+  `Share of recaptures` = sapply(levels(cls), function(k)
+    fpc(sum(grp$R[cls == k]) / R_tot, 1)),
+  `Experiment D bias class (mixing-period F)` =
+    c("a few per cent", "up to roughly one third",
+      "roughly one third to one half", "one half or more"),
+  check.names = FALSE)
+knitr::kable(tab, row.names = FALSE)
+
+byprog <- do.call(rbind, lapply(split(grp, grp$prog), function(d) data.frame(
+  Programme = d$prog[1], Groups = nrow(d), Releases = fnum(round(sum(d$N))),
+  `Mixing returns` = fnum(sum(d$Rmix)),
+  `Weighted psi (fishery rates)` = round(sum(pmin(d$psi, 1) * d$N) / sum(d$N), 3),
+  `(regional means)` = round(sum(pmin(d$psi_reg, 1) * d$N) / sum(d$N), 3),
+  check.names = FALSE)))
+knitr::kable(byprog[order(match(byprog$Programme, c("RTTP", "PTTP", "JPTP"))), ],
+             row.names = FALSE)
+```
+
+The programme contrast carries the story: the face-value assumption is nearly correct
+where the fitted rates are near one, and costs a third to a half of the true mixing
+removals where they are near one half — which is where
+`r fpc(sum(grp$N[grp$prog != "JPTP"]) / N_tot, 0)` of the releases sit.
+
+# Limitations
+
+1. **The transcribed settings are the load-bearing inputs.** `nmix` and the
+   reporting-rate patterns must be verified against the final `.par` before this note
+   is relied on; a render against different settings will silently produce different —
+   correct — numbers.
+2. **The fitted rates were estimated under `tag_flags(i,2) = 1`.** Using them to
+   characterise the raised counterfactual is indicative; under the default the rates
+   would re-equilibrate, and the feedback runs toward the floor. The one-group floor
+   finding should be confirmed from an actual `tag_flags(i,2) = 0` fit before it is
+   quoted without qualification.
+3. **The Experiment D mapping is from a deliberately stripped-down operating model.**
+   It gives the class of the bias, not its value in a full assessment; the companion
+   study's limitations section applies in full.
+4. **The ensemble status results are reported, not reproduced.** This note takes the
+   direction and existence of the flip as given by the assessment team; nothing here
+   recomputes grid outputs.
+5. **$\hat\psi$ inherits the rates it is raised by**, in the direction that understates
+   the problem if reporting estimates fall further, and the zero-rate fishery-27
+   returns are excluded from raising.
+
+# Appendix: per-group $\hat\psi$ {#sec-appendix}
+
+```{r appendix}
+#| echo: false
+app <- data.frame(Group = grp$gid, Prog. = grp$prog, Region = grp$region,
+                  Year = grp$year, `tag_flags(i,1)` = grp$nmix,
+                  N = round(grp$N), R = grp$R, `R mix` = grp$Rmix,
+                  `psi (fishery rates)` = round(grp$psi, 3),
+                  `psi (regional means)` = round(grp$psi_reg, 3),
+                  check.names = FALSE)
+knitr::kable(app, row.names = FALSE)
+```
