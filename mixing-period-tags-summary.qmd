@@ -467,26 +467,47 @@ fit_one <- function(returns, p, mode) {
 set.seed(20260810)
 n_sim <- 100
 forward_design <- expand.grid(x_true = c(0.35, 0.50, 0.65),
+                              nmix = 2:4,
+                              phi = c(0.5, 1.0, 2.0),
                               mode = c("flag0", "flag1", "forward_X"),
                               replicate = seq_len(n_sim), KEEP.OUT.ATTRS = FALSE)
 forward_res <- do.call(rbind, lapply(seq_len(nrow(forward_design)), function(row) {
   setting <- forward_design[row, ]
-  fit <- fit_one(simulate_returns(om, setting$x_true), om, setting$mode)
-  data.frame(x_true = setting$x_true, mode = setting$mode,
+  scenario_om <- modifyList(om, list(nmix = setting$nmix, phi = setting$phi))
+  fit <- fit_one(simulate_returns(scenario_om, setting$x_true), scenario_om, setting$mode)
+  data.frame(x_true = setting$x_true, nmix = setting$nmix, phi = setting$phi,
+             mode = setting$mode,
              F_hat = fit[["F_hat"]], X_hat = fit[["X_hat"]],
              conv = fit[["conv"]], at_bound = fit[["at_bound"]])
 }))
 forward_res$rel_bias <- forward_res$F_hat / om$F_true - 1
-forward_summary <- do.call(rbind, lapply(split(forward_res,
-                                                list(forward_res$x_true,
-                                                     forward_res$mode), drop = TRUE),
+forward_plot <- do.call(rbind, lapply(split(forward_res[forward_res$conv == 0, ],
+                                             list(forward_res$x_true[forward_res$conv == 0],
+                                                  forward_res$nmix[forward_res$conv == 0],
+                                                  forward_res$phi[forward_res$conv == 0],
+                    forward_res$mode[forward_res$conv == 0]),
+                  drop = TRUE),
+  function(d) data.frame(x_true = d$x_true[1], nmix = d$nmix[1], phi = d$phi[1],
+                         mode = d$mode[1], lo = unname(quantile(d$rel_bias, 0.25)),
+                         mid = median(d$rel_bias), hi = unname(quantile(d$rel_bias, 0.75)))))
+
+# Retain the original baseline table as a compact diagnostic alongside the
+# expanded figure. The plot below displays the complete crossed design.
+baseline_res <- forward_res[forward_res$nmix == 2 & forward_res$phi == 1, ]
+forward_summary <- do.call(rbind, lapply(split(baseline_res,
+                                                list(baseline_res$x_true,
+                                                     baseline_res$mode), drop = TRUE),
   function(d) data.frame(`True reporting rate` = d$x_true[1], Treatment = d$mode[1],
                          `Median F bias` = median(d$rel_bias),
                          `Forward_X convergence` = mean(d$conv == 0),
                          `Flag endpoint contact` = mean(d$at_bound == 1),
                          check.names = FALSE)))
 forward_summary <- forward_summary[order(forward_summary[[1]], forward_summary[[2]]), ]
-stopifnot(!any(forward_res$at_bound[forward_res$mode %in% c("flag0", "flag1")] == 1))
+stopifnot(
+  nrow(forward_plot) == 3L * 3L * 3L * 3L,
+  all(forward_plot$lo <= forward_plot$mid & forward_plot$mid <= forward_plot$hi),
+  !any(forward_res$at_bound[forward_res$mode %in% c("flag0", "flag1")] == 1)
+)
 ```
 
 # How MULTIFAN-CL treats mixing returns {#sec-mechanics}
@@ -839,12 +860,24 @@ knitr::kable(expd_table[order(expd_table$`Target psi`, expd_table$`Mixing period
 
 ## `forward_X` proof of concept
 
-This stochastic check simulates `r n_sim` release histories for each true reporting rate,
-holding the analyst's prior centre at $X=0.5$. It compares the two deterministic flags
-with `forward_X`, which estimates $F$, mixing availability, and $X$ jointly under its
-reporting-rate prior. The convergence column is deliberately reported rather than
-silently filtering failed `forward_X` fits; endpoint contacts are similarly reported for
-the deterministic inversions.
+This stochastic check simulates `r n_sim` release histories in each condition, holding
+the analyst's prior centre at $X=0.5$. In addition to the true reporting rate and the
+three mixing lengths (2, 3, and 4 quarters), it varies $\varphi$, the relative
+availability of tagged fish to the fishery while the mixing rule is active. A value of
+$\varphi = 1$ means tagged fish are as available as the general population; values
+below 1 mean they are less available, while values above 1 mean they are more available.
+It is a property of the simulated world, not a flag setting. `forward_X` estimates it
+alongside $F$ and $X$; the two flags instead absorb it through their deterministic
+mixing-period inversions.
+
+The figure compares the two deterministic flags with `forward_X`. Lines are median
+signed relative error in $F$, so values above zero overestimate $F$ and values below zero
+underestimate it. Shaded bands contain the central 50% of replicate estimates (the 25th
+through 75th percentiles). This is a compact sensitivity check, not a re-run of the
+companion study's full simulation design. The convergence and endpoint columns below are
+deliberately reported rather than silently filtering failed `forward_X` fits or bounded
+deterministic inversions; the table retains the original baseline ($\varphi = 1$,
+two mixing periods) for readability.
 
 ```{r forward-x-table}
 #| echo: false
@@ -854,6 +887,81 @@ forward_display$`Forward_X convergence` <- fpc(forward_display$`Forward_X conver
 forward_display$`Flag endpoint contact` <- fpc(forward_display$`Flag endpoint contact`, 0)
 knitr::kable(forward_display, row.names = FALSE)
 ```
+
+```{r forward-x-ribbon-plot}
+#| echo: false
+#| fig-width: 10
+#| fig-height: 9
+#| fig-cap: "Median signed percentage bias in F across true reporting rate, mixing-period length, and tagged-fish availability. Shaded bands are the central 50% of replicate estimates."
+mode_order <- c("flag0", "flag1", "forward_X")
+mode_col <- c(flag0 = "#D85A30", flag1 = "#1D9E75", forward_X = "#378ADD")
+phi_values <- sort(unique(forward_plot$phi), decreasing = TRUE)
+x_values <- sort(unique(forward_plot$x_true))
+y_lim <- range(c(forward_plot$lo, forward_plot$hi, 0))
+y_pad <- diff(y_lim) * 0.06
+if (y_pad == 0) y_pad <- 0.05
+y_lim <- y_lim + c(-y_pad, y_pad)
+y_ticks <- pretty(y_lim)
+
+old_par <- par(no.readonly = TRUE)
+par(mfrow = c(length(phi_values), length(x_values)), oma = c(3.5, 4, 1, 1),
+    mar = c(2.4, 2.7, 2.4, 0.7))
+
+for (phi_value in phi_values) {
+  for (x_value in x_values) {
+    panel <- forward_plot[forward_plot$phi == phi_value &
+                          forward_plot$x_true == x_value, ]
+    plot(NA, xlim = c(1.8, 4.2), ylim = y_lim, xaxt = "n", yaxt = "n",
+          xlab = "", ylab = "",
+         main = paste0("x = ", x_value, ", phi = ", phi_value))
+    abline(h = y_ticks, lty = 3, col = "grey65")
+    if (x_value == min(x_values)) {
+      axis(2, at = y_ticks, labels = paste0(round(100 * y_ticks), "%"),
+           cex.axis = 0.8)
+    }
+    if (phi_value == min(phi_values)) {
+      axis(1, at = 2:4, labels = 2:4)
+    }
+    abline(h = 0, lty = 2, col = "black")
+
+    for (mode_value in mode_order) {
+      d <- panel[as.character(panel$mode) == mode_value, ]
+      d <- d[order(d$nmix), ]
+      polygon(c(d$nmix, rev(d$nmix)), c(d$lo, rev(d$hi)), border = NA,
+              col = adjustcolor(mode_col[[mode_value]], alpha.f = 0.20))
+      lines(d$nmix, d$mid, type = "b", pch = 16, lwd = 2,
+            col = mode_col[[mode_value]])
+    }
+    if (phi_value == phi_values[1] && x_value == x_values[1]) {
+      legend("topleft", legend = mode_order, col = mode_col[mode_order], lwd = 2,
+             pch = 16, bty = "n", cex = 0.78)
+    }
+  }
+}
+mtext("Mixing periods", side = 1, outer = TRUE, line = 1.5)
+mtext("Signed percentage bias in F-hat", side = 2, outer = TRUE, line = 2.3)
+par(old_par)
+```
+
+Across these scenarios, `forward_X` is mostly unbiased: its median percentage bias
+stays close to zero even when the true reporting rate differs from the value used to
+centre the prior. The flag settings have a different structural interpretation. `flag1`
+always removes reported returns at face value rather than correcting for incomplete
+reporting, so it estimates a lower $F$ and cannot produce an unbiased estimate of $F$
+when the reporting rate is below one. `flag0` can be unbiased when the true reporting
+rate matches the rate used for the correction, because its raised removal then matches
+the true expected removal.
+
+When the true reporting rate is lower than the assumed rate, both flags under-remove
+tags and underestimate $F$. When the true reporting rate is higher than assumed,
+`flag0` over-removes and overestimates $F$; `flag1` also moves upward to some extent as
+the extra true recaptures during mixing leave fewer tags available after the deterministic
+face-value removal, but remains the lower flag treatment. Performance generally degrades
+as the mixing period lengthens: errors accumulate over more deterministic mixing periods,
+and the spread represented by the ribbon tends to widen as well. The two flag settings
+also do not bound the $F$ estimate: because `flag0` is always the higher flag treatment
+when the assumed reporting rate is below one, the pair can sit entirely above or below
+the truth rather than enclosing it.
 
 # Limitations
 
@@ -879,9 +987,10 @@ knitr::kable(forward_display, row.names = FALSE)
   depletion and stock-status results are comparable to the current tagged model is
   reported from Appendix A1 of the 2026 bigeye full paper. This note does not reproduce
   that model, assess its fits, or simulate its spatial representation.
-7. **The embedded simulations are proof-of-concept checks.** They are intentionally
-  smaller and simpler than the companion study, and do not quantify this assessment's
-  fitted $F$ bias or validate a MULTIFAN-CL implementation. Their reporting-rate prior,
+7. **The embedded simulations are proof-of-concept checks.** They vary true reporting
+  rate, mixing length, and relative tagged-fish availability, but remain intentionally
+  smaller and simpler than the companion study. They do not quantify this assessment's
+  fitted $F$ bias or validate a MULTIFAN-CL implementation; their reporting-rate prior,
   observation model, and single-group design are illustrative.
 
 # Appendix: per-group $\hat\psi$ {#sec-appendix}
