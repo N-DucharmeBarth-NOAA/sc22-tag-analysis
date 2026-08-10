@@ -97,15 +97,18 @@ by `tag_flags(i,2)`. It computes, directly from `bet.tag` and the model's flag s
 the two quantities that govern the problem — the share of recapture data excluded from
 the likelihood, and the mixing-period recapture fraction $\hat\psi$ raised by the fitted
 fishery-specific reporting rates — and reads them against a companion simulation study
-(*Mixing-period tag recaptures in MULTIFAN-CL*, v11) whose results are quoted with
+(*Mixing-period tag recaptures in MULTIFAN-CL*, v10) whose results are quoted with
 provenance, not re-derived.
 
 Everything computed here is parsed inline from the `.tag` and fitted `.par` inputs;
 everything quoted from the simulation study or reported from the assessment's
 uncertainty grid is labelled as such. The recommendation at the end — a mixing-period
-likelihood as the resolution, and a tag-free fleets-as-areas configuration as the
-practical bound — follows from the demonstrated deficiencies of both flag settings, not
-from any simulation of a spatial model, which no document in this series performs.
+likelihood as the resolution, and a tag-free fleets-as-areas configuration as a candidate
+structural alternative — follows from the demonstrated deficiencies of both flag
+settings. Appendix A1 of the 2026 bigeye full paper reports that the already-developed
+fleets-as-areas model gives comparable depletion and stock-status results; that result
+is cited here, not reproduced. No document in this series simulates a fleets-as-areas
+configuration.
 :::
 
 ::: {.callout-note}
@@ -125,7 +128,7 @@ caches them under `r params$cache_dir`.
 ::: {.callout-warning}
 ## Disclaimer: use of AI assistance
 
-This note was prepared with the assistance of a large language model (Anthropic Claude).
+This note was prepared with the assistance of large language models.
 The model parsed `bet.tag`, transcribed the flag settings and the `tag fish rep`
 reporting-rate matrix from the supplied diagnostic `.par`, computed the diagnostics, and
 drafted the text.
@@ -302,7 +305,239 @@ floor_util <- sapply(seq_len(98), function(g) {
   u
 })
 n_floor <- sum(floor_util >= 1)
+grp$raised_mix <- grp$psi * grp$N
+grp$unremoved_flag1 <- pmax(grp$raised_mix - grp$Rmix, 0)
+grp$floor_util_flag0 <- floor_util
 ```
+
+```{r minimal-simulations}
+#| code-summary: "Minimal Experiment D calibration and forward_X proof of concept"
+
+# This deliberately small operating model is an executable illustration of the
+# mechanism, not a re-run of the companion study or an assessment operating model.
+baranov <- function(f, n, m) {
+  z <- f + m
+  (f / z) * (1 - exp(-z)) * n
+}
+
+om <- list(N0 = 10000, Tmax = 8, M = 0.20, F_true = 0.15,
+           X_assumed = 0.50, nmix = 2L, phi = 1)
+
+psi_of <- function(p, phi, nmix) {
+  n <- p$N0
+  total <- 0
+  for (t in seq_len(nmix)) {
+    total <- total + baranov(p$F_true * phi, n, p$M)
+    n <- n * exp(-(p$F_true * phi + p$M))
+  }
+  total / p$N0
+}
+
+psi_closed <- function(p, phi, nmix) {
+  z <- p$F_true * phi + p$M
+  (p$F_true * phi / z) * (1 - exp(-nmix * z))
+}
+
+phi_for_psi <- function(target, nmix, p = om, phi_max = 30) {
+  if (target <= 0) return(0)
+  if (psi_of(p, phi_max, nmix) < target) return(NA_real_)
+  uniroot(function(phi) psi_of(p, phi, nmix) - target,
+          interval = c(1e-8, phi_max), tol = 1e-10)$root
+}
+
+bias_pred <- function(p, phi, nmix, x) {
+  psi <- psi_of(p, phi, nmix)
+  n_post <- p$N0 * exp(-(p$F_true * phi + p$M) * nmix)
+  unremoved <- (1 - x) * psi * p$N0
+  -unremoved / (n_post + unremoved)
+}
+
+# Matched-psi Experiment D calibration: expected, not Monte Carlo, results.
+expd <- expand.grid(psi_target = c(0.05, 0.30, 0.50), nmix = 2:4)
+expd$phi <- mapply(phi_for_psi, expd$psi_target, expd$nmix)
+expd$psi <- mapply(function(phi, nmix) psi_of(om, phi, nmix),
+                   expd$phi, expd$nmix)
+expd$bias <- mapply(function(phi, nmix) bias_pred(om, phi, nmix, om$X_assumed),
+                    expd$phi, expd$nmix)
+stopifnot(
+  all(is.finite(expd$phi)),
+  max(abs(expd$psi - expd$psi_target)) < 1e-8,
+  all(expd$bias < 0),
+  all(abs(mapply(function(phi, nmix) psi_of(om, phi, nmix) -
+                   psi_closed(om, phi, nmix),
+                 expd$phi, expd$nmix)) < 1e-12)
+)
+
+# Conditional application of that approximation to this file. Each group is matched
+# on its observed psi-hat and mixing length, using its effective fitted reporting rate.
+eligible_reported <- with(rec[rec$mix & rec$rate > 0, ],
+                          tapply(n, factor(gid, levels = 1:98), sum))
+eligible_reported[is.na(eligible_reported)] <- 0
+grp$x_effective <- ifelse(grp$raised_mix > 0, eligible_reported / grp$raised_mix, NA)
+grp$phi_matched <- mapply(phi_for_psi, grp$psi, grp$nmix)
+grp$flag1_bias_illustrative <- mapply(
+  function(phi, nmix, x) {
+    if (!is.finite(phi) || !is.finite(x) || x <= 0 || x > 1) return(NA_real_)
+    bias_pred(om, phi, nmix, x)
+  }, grp$phi_matched, grp$nmix, grp$x_effective)
+
+# Minimal stochastic forward_X proof of concept.
+posfun <- function(x, eps) {
+  if (x >= eps) return(c(y = x, pen = 0))
+  c(y = eps / (2 - x / eps), pen = (x - eps)^2)
+}
+
+solve_mixing_f <- function(target, n, m, iter = 25) {
+  if (target <= 0) return(0)
+  f <- -log(1 - min(target / n, 0.999))
+  for (iteration in seq_len(iter)) {
+    z <- f + m
+    e <- exp(-z)
+    gradient <- (f / z) * (1 - e) * n - target
+    derivative <- n * ((m * (1 - e)) / z^2 + (f / z) * e)
+    f <- max(f - gradient / derivative, 1e-10)
+  }
+  f
+}
+
+mix_step <- function(r, n, p, mode, floor = sim$floor_tau) {
+  target <- if (mode == "flag0") r / p$X_assumed else r
+  survival <- 1 - target / n
+  floored <- survival < floor
+  penalty <- 0
+  if (floored) {
+    adjusted <- posfun(survival - 0.02, floor - 0.02)
+    survival <- 0.02 + adjusted[["y"]]
+    penalty <- adjusted[["pen"]]
+    target <- n * (1 - survival)
+  }
+  list(f = solve_mixing_f(target, n, p$M), penalty = penalty, floored = floored)
+}
+
+simulate_returns <- function(p, x_true) {
+  n <- p$N0
+  returns <- numeric(p$Tmax)
+  for (t in seq_len(p$Tmax)) {
+    f <- p$F_true * if (t <= p$nmix) p$phi else 1
+    returns[t] <- rpois(1, x_true * baranov(f, n, p$M))
+    n <- n * exp(-(f + p$M))
+  }
+  returns
+}
+
+nll_tag <- function(par, returns, p, mode, prior_sd = 0.25) {
+  f_pop <- exp(par[1])
+  phi <- if (mode == "forward_X") exp(par[2]) else 1
+  x <- if (mode == "forward_X") plogis(par[3]) else p$X_assumed
+  n <- p$N0
+  nll <- 0
+  for (t in seq_len(p$Tmax)) {
+    if (t <= p$nmix && mode %in% c("flag0", "flag1")) {
+      step <- mix_step(returns[t], n, p, mode)
+      f <- step$f
+      nll <- nll + 1000 * step$penalty
+    } else {
+      f <- if (t <= p$nmix) f_pop * phi else f_pop
+      mu <- x * baranov(f, n, p$M) + 1e-10
+      nll <- nll - dpois(returns[t], mu, log = TRUE)
+    }
+    n <- n * exp(-(f + p$M))
+  }
+  if (mode == "forward_X") {
+    nll <- nll + 0.5 * ((log(x) - log(p$X_assumed)) / prior_sd)^2
+  }
+  nll
+}
+
+fit_one <- function(returns, p, mode) {
+  if (mode %in% c("flag0", "flag1")) {
+    interval <- log(c(1e-3, 5))
+    fit <- optimize(function(log_f) nll_tag(c(log_f, 0, 0), returns, p, mode),
+                    interval = interval, tol = 1e-9)
+    return(c(F_hat = exp(fit$minimum), X_hat = p$X_assumed, conv = 0,
+             at_bound = as.numeric(any(abs(fit$minimum - interval) < 1e-3))))
+  }
+  fit <- optim(c(log(0.10), log(1), qlogis(p$X_assumed)),
+               function(par) nll_tag(par, returns, p, mode), method = "Nelder-Mead",
+               control = list(maxit = 3000, reltol = 1e-10))
+  c(F_hat = exp(fit$par[1]), X_hat = plogis(fit$par[3]), conv = fit$convergence,
+    at_bound = 0)
+}
+
+set.seed(20260810)
+n_sim <- 100
+forward_design <- expand.grid(x_true = c(0.35, 0.50, 0.65),
+                              mode = c("flag0", "flag1", "forward_X"),
+                              replicate = seq_len(n_sim), KEEP.OUT.ATTRS = FALSE)
+forward_res <- do.call(rbind, lapply(seq_len(nrow(forward_design)), function(row) {
+  setting <- forward_design[row, ]
+  fit <- fit_one(simulate_returns(om, setting$x_true), om, setting$mode)
+  data.frame(x_true = setting$x_true, mode = setting$mode,
+             F_hat = fit[["F_hat"]], X_hat = fit[["X_hat"]],
+             conv = fit[["conv"]], at_bound = fit[["at_bound"]])
+}))
+forward_res$rel_bias <- forward_res$F_hat / om$F_true - 1
+forward_summary <- do.call(rbind, lapply(split(forward_res,
+                                                list(forward_res$x_true,
+                                                     forward_res$mode), drop = TRUE),
+  function(d) data.frame(`True reporting rate` = d$x_true[1], Treatment = d$mode[1],
+                         `Median F bias` = median(d$rel_bias),
+                         `Forward_X convergence` = mean(d$conv == 0),
+                         `Flag endpoint contact` = mean(d$at_bound == 1),
+                         check.names = FALSE)))
+forward_summary <- forward_summary[order(forward_summary[[1]], forward_summary[[2]]), ]
+stopifnot(!any(forward_res$at_bound[forward_res$mode %in% c("flag0", "flag1")] == 1))
+```
+
+# How MULTIFAN-CL treats mixing returns {#sec-mechanics}
+
+The issue is not that MULTIFAN-CL lacks a tag likelihood. **After mixing**, it projects
+the tagged population with the population fishing mortality, predicts reported returns
+as expected recaptures multiplied by the reporting rate, and scores those returns in the
+tag likelihood. **During mixing**, it instead uses observed returns to solve
+deterministically for a tag-specific removal that fixes the tagged population state.
+The mixing returns themselves contribute no likelihood term under either flag setting.
+
+| `tag_flags(i,2)` | Mixing-period removal target | Mixing returns scored in likelihood? | Principal failure mode |
+|---:|---|:---:|---|
+| 0 | $R_{obs} / X$ | No | Conditionally valid only if the assumed reporting rate is right, the survival floor is inactive, and the release-group inversion is informative. |
+| 1 | $R_{obs}$ | No | Assumes complete reporting and systematically under-removes wherever $X < 1$. |
+
+Here $R_{obs}$ is the reported return and $X$ is its reporting rate. The first setting
+raises observed returns for non-reporting before removal; the second treats reported
+returns as true recaptures. Neither treatment lets the model estimate a disagreement
+between predicted and observed mixing returns, attach uncertainty to them, or update
+parameters through a mixing-period likelihood. This is why choosing a flag is not a
+likelihood-based treatment of the data.
+
+## Why `tag_flags(i,2) = 1` exists {#sec-floor}
+
+`tag_flags(i,2) = 1` exists to provide an escape from a failure mode of the original,
+rate-raised treatment. Under `tag_flags(i,2) = 0`, MULTIFAN-CL divides a reported
+mixing-period return by its assumed reporting rate before removing tags. This is the
+natural correction for incomplete reporting, but it can become numerically and
+biologically implausible when the raised removal is large relative to the tagged cohort.
+
+The survival-floor pathology is what happens next. With a low reporting rate, a large
+observed return, or both, the implied removal in one mixing period can leave fewer tags
+than MULTIFAN-CL permits to survive. The model then applies `posfun`: it floors survival
+and rescales removal to the amount consistent with that floor. Rather than removing
+$R_{obs}/X$, it removes less. The raised treatment therefore becomes an under-removal
+treatment at precisely the point it was intended to correct under-reporting, pulling
+inferred $F$ downward and biomass upward.
+
+Flag 1 avoids that rate-raised floor pathway by removing only $R_{obs}$. It does not
+solve the statistical problem. It trades a conditional cap pathology for the
+unconditional assumption that reporting is complete, so it under-removes whenever
+$X < 1$, whether or not the floor would have engaged under flag 0.
+
+For this file, the fitted fishery-specific reporting rates and configured mixing windows
+screen `r n_floor` group(s) as reaching the configured floor under flag 0, rather than
+the six groups suggested by regional-mean raising. This makes the floor a targeted
+flag-0 fit diagnostic, not a general reason to select flag 1 and not evidence that it is
+absent. The current rates were fitted under flag 1 and would re-equilibrate under flag 0;
+an actual flag-0 fit must identify any floor engagements and their objective-function
+contribution.
 
 # Summary {#sec-summary}
 
@@ -369,30 +604,126 @@ The honest statement of status is therefore not either determination — it is t
 determination currently turns on a model component that is biased under both of its
 available settings.
 
-**The resolution and the way forward are different things.** The resolution is a
-mixing-period likelihood: predict mixing-period returns, score them against
-observations, and estimate the reporting rate against its tag-seeding prior — putting
-`r fpc(mix_share, 0)` of the tag data back into estimation and inverting nothing. The
-companion study implements this (`forward_X`) and it recovers $F$ under the
-misspecification that biases both flag settings; MULTIFAN-CL cannot currently do it, so
-it is a redevelopment request, not a configuration, and the study also shows it is not
-free with many small release groups. Until it exists, the most defensible way forward is
-to bound the component rather than tune it: include a tag-free configuration, with
-spatial structure carried by a fleets-as-areas approach, in the structural uncertainty
-grid. Given that the status determination demonstrably moves with the tag treatment, the
-question that configuration answers — how much of the assessment result depends on the
-tagging data at all — is now the question managers most need answered.
+# Assessment guidance {#sec-guidance}
+
+## First-level guidance: resolve or replace the tagged formulation
+
+**The resolution is a mixing-period likelihood.** During mixing, MULTIFAN-CL should
+project the tagged cohort, predict reported returns as $X C$, score those returns against
+the observations, and estimate reporting rates against their tag-seeding priors. This
+would put `r fpc(mix_share, 0)` of the tag data back into estimation and remove the
+deterministic inversion. The companion simulation's `forward_X` treatment recovers $F$
+under reporting-rate misspecification that biases both flags, but it is not free: when
+release groups are small, estimating fishing mortality, mixing availability, and
+reporting rates together can be imprecise. This is a MULTIFAN-CL redevelopment and
+validation task, not a configuration change for the current assessment.
+
+Formally, for release group $i$, period $t$, and fishery $f$, `forward_X` advances the
+tagged cohort $N_{it}$ using a mixing-period fishing mortality $F^T_{it}$ and natural
+mortality $M$, forms true recaptures $C_{itf}$ from that state, and predicts
+
+$$
+\mu_{itf} = X_{if} C_{itf}.
+$$
+
+The mixing return then contributes an observation likelihood, for example
+$R_{itf} \sim \operatorname{Poisson}(\mu_{itf})$, instead of a deterministic removal
+target. A tag-seeding prior supplies information on the reporting rate, such as a
+penalty on $\log X_{if}$ around its prior mean. In the proof of concept, the free
+parameters are population fishing mortality ($\log F$), a mixing-period availability
+multiplier ($\log \varphi$), and reporting rate ($\operatorname{logit}X$). The flags
+estimate none of the latter two from mixing returns; they solve for whatever
+mixing-period removal reproduces their chosen target. `forward_X` consequently lets the
+data, process, and prior disagree in an estimable way, but it can be weakly identified
+when many small release groups must inform all three quantities.
+
+**A tag-free fleets-as-areas model is also a credible path for model development and
+management advice.** Appendix A1 of the
+[2026 bigeye full paper](https://meetings.wcpfc.int/node/32657) reports that the
+already-developed, spatially implicit fleets-as-areas model has comparable depletion and
+stock-status results to the current tagged model. That agreement is reported here, not
+reproduced. Subject to its own fit and diagnostic evaluation, this is a candidate full
+assessment model and may be included in the structural uncertainty grid. It represents
+uncertainty in the combined data-and-spatial formulation, not a correction for the tag
+flags or an estimate of their isolated effect. It does not validate the tagged model's
+mixing-period treatment.
+
+## Second-level guidance: the tagged spatial branch
+
+For this tag file, `tag_flags(i,2) = 1` should not be retained as the selected tagged
+configuration. It removes reported returns at face value even though the mixing returns
+that matter most are not fully reported: weighted $\hat\psi$ is
+`r round(w_by_prog["RTTP"], 3)` for RTTP and `r round(w_by_prog["PTTP"], 3)` for PTTP,
+compared with `r round(w_by_prog["JPTP"], 3)` for JPTP. `r sum(hi)` groups with
+$\hat\psi \ge 0.3$ carry `r fpc(rec_hi, 0)` of all reported recaptures. The configured
+face-value treatment therefore imposes its known directional bias on a material share of
+the data, concentrated in programmes with purse-seine reporting rates near one half.
+It can remain a documented diagnostic sensitivity, but not an equally weighted grid level
+or a bounding endpoint.
+
+If a tagged spatial branch must be retained before either first-level path is available,
+`tag_flags(i,2) = 0` is the provisionally preferable single setting, with three explicit
+conditions attached to this file:
+
+1. **Confirm floor behaviour in an actual flag-0 fit.** The fitted-rate screen identifies
+  `r n_floor` group(s) whose raised mixing removal reaches the configured survival floor.
+  That is substantially less than the regional-mean screen suggests, but it is not a
+  clean pass: fitted reporting rates would re-equilibrate after the flag changes. The
+  actual fit must report the affected group(s), the `posfun` contribution, and the
+  resulting floor utilization before its outputs are used for advice.
+2. **Treat small-group inversion as a tail diagnostic, not a median diagnostic.**
+  `r sum(grp$N <= sim$expE_N)` of the 98 release groups contain `r sim$expE_N` tags or
+  fewer. The simulation result implies that their raised-return inversions can produce
+  an upper tail in $F$ even with correct reporting rates and an inactive floor. The
+  flag-0 run should therefore report group-level implied mixing mortality and any
+  optimizer-bound or extreme-return diagnostics, rather than relying on a pooled median
+  or likelihood summary.
+3. **Represent reporting-rate uncertainty directly.** Switching to flag 0 raises
+  `r fnum(round(sum(extra[c("purse seine 0.46-0.84", "longline 0.16-0.26")])))` mixing
+  returns in the purse-seine and longline rate bands, but only
+  `r fnum(round(extra["JP coastal 0.99"]))` in the near-complete-reporting Japanese
+  coastal band. The change is therefore driven by precisely the reporting rates under
+  active scrutiny. Sensitivity to their priors or fixed assumptions belongs in the
+  tagged-model diagnostic set; replacing it with a flag-1 grid level would hide rather
+  than represent that uncertainty.
+
+The `r fnum(zero_mix)` zero-rate mixing returns are unresolved under either choice and
+should be traced separately. Neither setting converts the excluded
+`r fpc(mix_share, 0)` of recaptures into probabilistic evidence, so this provisional
+choice does not remove the case for the likelihood redevelopment or the tag-free
+fleets-as-areas alternative.
 
 # The $\hat\psi$ table {#sec-psi}
 
-$\hat\psi_i$ raises each mixing-window return by the fitted rate of the fishery that
-reported it, then divides by the correction-adjusted release count. Omitting the raising
-returns $X\psi$ rather than $\psi$ — roughly half the diagnosed fraction at purse-seine
-rates, and because the bias steepens in $\psi$, less than half the diagnosed
-consequence. `r fnum(zero_mix)` mixing returns come from a fishery whose fitted rate is
-zero and cannot be raised at all; they are excluded, which understates $\hat\psi$ for
-the affected groups, and the inconsistency should be resolved regardless of the flag
-choice.
+For release group $i$, the empirical diagnostic in this note is
+
+$$
+\hat\psi_i = \frac{1}{N_i}\sum_{t < n_{mix,i}}\sum_f
+\frac{R_{itf}}{\hat X_{if}},
+$$
+
+where $R_{itf}$ is a reported mixing-window return from fishery $f$, $\hat X_{if}$ is
+its fitted reporting rate, and $N_i$ is the correction-adjusted release count. Thus
+$\hat\psi_i$ estimates the fraction of the group truly recaptured while the mixing rule
+is active; it is not the fraction merely reported. Omitting the raising returns
+$X\psi$ rather than $\psi$ — roughly half the diagnosed fraction at purse-seine rates,
+and because the bias steepens in $\psi$, less than half the diagnosed consequence.
+
+The companion simulation explains why this quantity governs `tag_flags(i,2) = 1`.
+That setting removes $R$ where it should remove the true recaptures $C$, leaving roughly
+$(1-X)\psi N_0$ extra tags at liberty. In the stripped-down operating model this gives
+the approximation
+
+$$
+\frac{\hat F}{F} \approx
+\frac{N_{post}}{N_{post} + (1-X)\psi N_0},
+$$
+
+so the effect is systematically toward lower $F$ and higher biomass. This is an
+analytical interpretation of the simulation, not a fitted assessment prediction.
+`r fnum(zero_mix)` mixing returns come from a fishery whose fitted rate is zero and
+cannot be raised at all; they are excluded, which understates $\hat\psi$ for the
+affected groups, and the inconsistency should be resolved regardless of the flag choice.
 
 ```{r psi-table}
 #| echo: false
@@ -424,6 +755,106 @@ where the fitted rates are near one, and costs a third to a half of the true mix
 removals where they are near one half — which is where
 `r fpc(sum(grp$N[grp$prog != "JPTP"]) / N_tot, 0)` of the releases sit.
 
+## Conditional implication for this tag file
+
+The following envelope applies the stripped-down Experiment D approximation to each
+release group's observed $\hat\psi$, mixing length, and effective fitted reporting rate.
+It is not an assessment estimate of $F$ bias: it holds the operating model's natural
+mortality and post-mixing fishing mortality fixed, infers the availability needed to
+produce the observed $\hat\psi$, and then asks what `tag_flags(i,2) = 1` would imply in
+that simplified setting. Its purpose is to make the direction and potential scale of the
+known face-value bias explicit for this file.
+
+```{r observed-psi-envelope}
+#| echo: false
+envelope <- do.call(rbind, lapply(split(grp, grp$prog), function(d) {
+  bias <- d$flag1_bias_illustrative[is.finite(d$flag1_bias_illustrative)]
+  data.frame(
+    Programme = d$prog[1],
+    `Calibrated groups` = length(bias),
+    `Weighted psi` = round(sum(pmin(d$psi, 1) * d$N) / sum(d$N), 3),
+    `Illustrative F bias range` = if (length(bias)) {
+      paste0(fpc(min(bias), 0), " to ", fpc(max(bias), 0))
+    } else "not calibrated",
+    check.names = FALSE)
+}))
+knitr::kable(envelope[order(match(envelope$Programme, c("RTTP", "PTTP", "JPTP"))), ],
+             row.names = FALSE)
+```
+
+# Mechanism checks {#sec-mechanism-checks}
+
+This table makes the deterministic difference between the two flags auditable from the
+same inputs as the $\hat\psi$ calculation. `Raised mixing returns` is the removal target
+under `tag_flags(i,2) = 0`; `reported mixing returns` is the target under
+`tag_flags(i,2) = 1`; their difference is the mixing-period removal omitted by the
+face-value treatment. `Flag-0 floor utilization` is the largest quarterly raised removal
+as a share of the amount that can be removed before the configured survival floor would
+engage. Values at or above one require confirmation from an actual flag-0 fit because
+reporting rates would re-equilibrate.
+
+```{r mechanism-checks}
+#| echo: false
+mech <- data.frame(
+  Group = grp$gid,
+  Prog. = grp$prog,
+  N = round(grp$N),
+  `Reported mixing returns` = grp$Rmix,
+  `Raised mixing returns` = round(grp$raised_mix),
+  `Unremoved by flag 1` = round(grp$unremoved_flag1),
+  `Flag-0 floor utilization` = round(grp$floor_util_flag0, 3),
+  check.names = FALSE)
+knitr::kable(mech, row.names = FALSE)
+```
+
+# Minimal simulation checks {#sec-minimal-simulations}
+
+The companion study remains the full simulation evidence. The two checks below are kept
+small enough to render with this note and make its two central claims reproducible: the
+`flag=1` bias grows with the fraction recaptured while mixing; and a likelihood that
+predicts rather than inverts mixing returns can recover from reporting-rate
+misspecification. They are intentionally not an assessment operating model: one fishery,
+one release group, Poisson reporting, fixed natural mortality, and no movement or age
+structure.
+
+## Matched-$\psi$ Experiment D calibration
+
+For each target $\psi$, the calculation solves for the mixing availability that gives
+that fraction at each mixing length and evaluates the analytical `flag=1` bias at
+$X=0.5$. The checks in the code require the iterative and closed-form $\psi$ values to
+agree and every calculated bias to be negative. At a common $\psi$, longer mixing still
+has a somewhat larger consequence because fewer tags remain at liberty after mixing.
+
+```{r expd-minimal-table}
+#| echo: false
+expd_table <- expd[, c("psi_target", "nmix", "phi", "bias")]
+names(expd_table) <- c("Target psi", "Mixing periods", "Matched availability",
+                       "Illustrative F bias")
+expd_table$`Target psi` <- round(expd_table$`Target psi`, 2)
+expd_table$`Matched availability` <- round(expd_table$`Matched availability`, 2)
+expd_table$`Illustrative F bias` <- fpc(expd_table$`Illustrative F bias`, 1)
+knitr::kable(expd_table[order(expd_table$`Target psi`, expd_table$`Mixing periods`), ],
+             row.names = FALSE)
+```
+
+## `forward_X` proof of concept
+
+This stochastic check simulates `r n_sim` release histories for each true reporting rate,
+holding the analyst's prior centre at $X=0.5$. It compares the two deterministic flags
+with `forward_X`, which estimates $F$, mixing availability, and $X$ jointly under its
+reporting-rate prior. The convergence column is deliberately reported rather than
+silently filtering failed `forward_X` fits; endpoint contacts are similarly reported for
+the deterministic inversions.
+
+```{r forward-x-table}
+#| echo: false
+forward_display <- forward_summary
+forward_display$`Median F bias` <- fpc(forward_display$`Median F bias`, 1)
+forward_display$`Forward_X convergence` <- fpc(forward_display$`Forward_X convergence`, 0)
+forward_display$`Flag endpoint contact` <- fpc(forward_display$`Flag endpoint contact`, 0)
+knitr::kable(forward_display, row.names = FALSE)
+```
+
 # Limitations
 
 1. **The transcribed settings are the load-bearing inputs.** `nmix` and the
@@ -444,6 +875,14 @@ removals where they are near one half — which is where
 5. **$\hat\psi$ inherits the rates it is raised by**, in the direction that understates
    the problem if reporting estimates fall further, and the zero-rate fishery-27
    returns are excluded from raising.
+6. **The fleets-as-areas result is cited, not reproduced.** The statement that its
+  depletion and stock-status results are comparable to the current tagged model is
+  reported from Appendix A1 of the 2026 bigeye full paper. This note does not reproduce
+  that model, assess its fits, or simulate its spatial representation.
+7. **The embedded simulations are proof-of-concept checks.** They are intentionally
+  smaller and simpler than the companion study, and do not quantify this assessment's
+  fitted $F$ bias or validate a MULTIFAN-CL implementation. Their reporting-rate prior,
+  observation model, and single-group design are illustrative.
 
 # Appendix: per-group $\hat\psi$ {#sec-appendix}
 
