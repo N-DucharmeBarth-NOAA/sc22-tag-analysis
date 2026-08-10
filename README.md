@@ -4,10 +4,10 @@ This repository contains reproducible Quarto analyses of the treatment of mixing
 
 ## Reports
 
-- `[mixing-period-tags-summary.qmd](https://n-ducharmebarth-noaa.github.io/sc22-tag-analysis/mixing-period-tags-summary.html)` is an executive summary examining what
+- [mixing-period-tags-summary.qmd](https://n-ducharmebarth-noaa.github.io/sc22-tag-analysis/mixing-period-tags-summary.html) is an executive summary examining what
   `tag_flags(i,2)` can and cannot do, using `bet.tag` and fitted reporting
   rates.
-- `[mixing-period-tags-v10.qmd](https://n-ducharmebarth-noaa.github.io/sc22-tag-analysis/mixing-period-tags-v10.html)` is a more in depth simulation investigation comparing
+- [mixing-period-tags-v10.qmd](https://n-ducharmebarth-noaa.github.io/sc22-tag-analysis/mixing-period-tags-v10.html) is a more in depth simulation investigation comparing
   `tag_flags(i,2)` settings with likelihood-based alternatives in MULTIFAN-CL.
 
 Rendered HTML versions of both reports are included in the repository. The analyses use input snapshots in `inputs/`, including `bet.tag`, `final.par`, and a cached source revision for reproducible rendering.
