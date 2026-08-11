@@ -94,8 +94,9 @@ fnum <- function(x) formatC(x, big.mark = ",", format = "d")
 This note is an executive summary of a methodological problem in the 2026 bigeye
 diagnostic model: the treatment of tag recaptures during the mixing period, controlled
 by `tag_flags(i,2)`. It computes, directly from `bet.tag` and the model's flag settings,
-the two quantities that govern the problem — the share of recapture data excluded from
-the likelihood, and the mixing-period recapture fraction $\hat\psi$ raised by the fitted
+the two quantities that govern the problem — the share of recapture data resolved
+deterministically inside the mixing windows rather than scored as evidence, and the
+mixing-period recapture fraction $\hat\psi$ raised by the fitted
 fishery-specific reporting rates — and reads them against a companion simulation study
 (*Mixing-period tag recaptures in MULTIFAN-CL*, v10) whose results are quoted with
 provenance, not re-derived.
@@ -261,7 +262,7 @@ N_tot <- sum(grp$N); R_tot <- sum(rec$n)
 ```{r compute}
 #| code-summary: "The two governing quantities"
 
-# 1. Share of recapture data excluded from the likelihood by the mixing windows.
+# 1. Share of recapture data falling inside the configured mixing windows.
 R_mix   <- sum(rec$n[rec$mix])
 mix_share <- R_mix / R_tot
 
@@ -509,27 +510,267 @@ stopifnot(
   !any(forward_res$at_bound[forward_res$mode %in% c("flag0", "flag1")] == 1)
 )
 ```
+```{r mixing-terms-check}
+#| code-summary: "Estimated reporting rates and the mixing-period likelihood terms"
+
+# Term-content check: reporting rate is now estimated with a log-scale tag-seeding
+# prior (the forward_X prior), while the flag removals run as before. The
+# mixing-period likelihood terms are formed exactly as MULTIFAN-CL forms them:
+# predicted reported returns equal the estimated rate times the removal the flag
+# actually made (baranov() of the solved mixing F equals the realized, possibly
+# floored, removal — the analogue of tagcatch built from nrfm). Each condition is
+# fitted with the mixing terms included and excluded on identical data; the
+# difference isolates what the terms alone do.
+
+mix_step_est <- function(r, n, p, x, raised) {
+  mix_step(r, n, modifyList(p, list(X_assumed = x)),
+           if (raised) "flag0" else "flag1")
+}
+
+nll_estimated_x <- function(par, returns, p, raised, include_mix,
+                            prior_sd = 0.25) {
+  f_pop <- exp(par[1])
+  x <- plogis(par[2])
+  n <- p$N0
+  nll <- 0
+  for (t in seq_len(p$Tmax)) {
+    if (t <= p$nmix) {
+      step <- mix_step_est(returns[t], n, p, x, raised)
+      f <- step$f
+      nll <- nll + 1000 * step$penalty
+      if (include_mix) {
+        mu <- x * baranov(f, n, p$M) + 1e-10
+        nll <- nll - dpois(returns[t], mu, log = TRUE)
+      }
+    } else {
+      f <- f_pop
+      mu <- x * baranov(f, n, p$M) + 1e-10
+      nll <- nll - dpois(returns[t], mu, log = TRUE)
+    }
+    n <- n * exp(-(f + p$M))
+  }
+  nll + 0.5 * ((log(x) - log(p$X_assumed)) / prior_sd)^2
+}
+
+# Deterministic structure checks on a non-floored expected-return realization:
+# the mixing-term block is invariant to the estimated rate under the raised
+# removal (the cancellation) and strictly decreasing toward X = 1 under the
+# face-value removal (the pseudo-data property).
+expected_returns <- function(p, x_true) {
+  n <- p$N0
+  sapply(seq_len(p$Tmax), function(t) {
+    f <- p$F_true * if (t <= p$nmix) p$phi else 1
+    out <- x_true * baranov(f, n, p$M)
+    n <<- n * exp(-(f + p$M))
+    out
+  })
+}
+
+mixing_term_block <- function(x, returns, p, raised) {
+  n <- p$N0
+  block <- 0
+  for (t in seq_len(p$nmix)) {
+    step <- mix_step_est(returns[t], n, p, x, raised)
+    mu <- x * baranov(step$f, n, p$M) + 1e-10
+    block <- block - dpois(returns[t], mu, log = TRUE)
+    n <- n * exp(-(step$f + p$M))
+  }
+  block
+}
+
+det_returns <- round(expected_returns(om, om$X_assumed))
+x_grid <- seq(0.35, 0.95, by = 0.05)
+block_raised <- sapply(x_grid, mixing_term_block, returns = det_returns,
+                       p = om, raised = TRUE)
+block_face   <- sapply(x_grid, mixing_term_block, returns = det_returns,
+                       p = om, raised = FALSE)
+
+# Prior widths: 0.25 is the weak single-group prior used above; 0.05 is a
+# tight tag-seeding prior, standing in for the stronger reporting-rate
+# information an assessment carries. Both are swept so the prose does not
+# have to assume how much the prior resists the pull.
+prior_sds <- c(0.25, 0.05)
+
+estx_res <- do.call(rbind, lapply(prior_sds, function(prior_sd) {
+  do.call(rbind, lapply(c(0.35, 0.50, 0.65), function(x_true) {
+    do.call(rbind, lapply(seq_len(n_sim), function(replicate) {
+      # Data depend on the condition and replicate only, so the paired
+      # include/exclude and prior-width fits see identical returns.
+      set.seed(20260811 + 1000 * round(100 * x_true) + replicate)
+      returns <- simulate_returns(om, x_true)
+      do.call(rbind, lapply(c(FALSE, TRUE), function(raised) {
+        do.call(rbind, lapply(c(TRUE, FALSE), function(include_mix) {
+          fit <- optim(c(log(0.10), qlogis(om$X_assumed)),
+                       function(par) nll_estimated_x(par, returns, om,
+                                                     raised, include_mix,
+                                                     prior_sd),
+                       method = "Nelder-Mead",
+                       control = list(maxit = 3000, reltol = 1e-10))
+          data.frame(prior_sd = prior_sd, x_true = x_true, raised = raised,
+                     include_mix = include_mix, replicate = replicate,
+                     F_hat = exp(fit$par[1]), X_hat = plogis(fit$par[2]),
+                     conv = fit$convergence)
+        }))
+      }))
+    }))
+  }))
+}))
+estx_res$rel_bias <- estx_res$F_hat / om$F_true - 1
+
+estx_ok <- estx_res[estx_res$conv == 0, ]
+med_x <- with(estx_ok, tapply(X_hat, list(x_true, raised, include_mix,
+                                          prior_sd), median))
+med_f <- with(estx_ok, tapply(F_hat, list(x_true, raised, include_mix,
+                                          prior_sd), median))
+
+estx_summary <- do.call(rbind, lapply(
+  split(estx_ok, interaction(estx_ok$prior_sd, estx_ok$x_true,
+                             estx_ok$raised, estx_ok$include_mix,
+                             drop = TRUE)),
+  function(d) data.frame(
+    `Prior sd` = d$prior_sd[1],
+    `True X` = d$x_true[1],
+    Removal = if (d$raised[1]) "raised (flag 0)" else "face value (flag 1)",
+    `Mixing terms` = if (d$include_mix[1]) "included" else "excluded",
+    `Median fitted X` = round(median(d$X_hat), 3),
+    `Median F bias` = median(d$rel_bias),
+    Converged = nrow(d) / n_sim,
+    check.names = FALSE)))
+
+# Tripwires: the render fails if any structural or directional claim in the
+# prose stops holding. Directions are enforced here, not asserted in the text.
+stopifnot(
+  # cancellation: raised-removal mixing terms invariant to the estimated rate
+  max(block_raised) - min(block_raised) < 1e-6,
+  # pseudo-data: face-value mixing terms strictly favour X = 1
+  all(diff(block_face) < 0),
+  # the pull on the fitted rate, in every face-value condition and at
+  # both prior widths
+  all(med_x[, "FALSE", "TRUE", ] > med_x[, "FALSE", "FALSE", ]),
+  # its downstream expression through a lower fitted F, likewise
+  all(med_f[, "FALSE", "TRUE", ] < med_f[, "FALSE", "FALSE", ]),
+  # inertness carries through to estimation under the raised removal
+  all(abs(med_x[, "TRUE", "TRUE", ] - med_x[, "TRUE", "FALSE", ]) < 0.02),
+  # the tighter prior resists the pull without eliminating it: the
+  # face-value inflation is smaller than under the weak prior, and still
+  # present, in every condition
+  all(med_x[, "FALSE", "TRUE", "0.05"] < med_x[, "FALSE", "TRUE", "0.25"])
+)
+
+# Inline values, weak and tight prior, at the design-centre true rate.
+pull_x  <- med_x["0.5", "FALSE", "TRUE",  "0.25"]
+base_x  <- med_x["0.5", "FALSE", "FALSE", "0.25"]
+pull_f  <- med_f["0.5", "FALSE", "TRUE",  "0.25"] / om$F_true - 1
+base_f  <- med_f["0.5", "FALSE", "FALSE", "0.25"] / om$F_true - 1
+tpull_x <- med_x["0.5", "FALSE", "TRUE",  "0.05"]
+tbase_x <- med_x["0.5", "FALSE", "FALSE", "0.05"]
+tpull_f <- med_f["0.5", "FALSE", "TRUE",  "0.05"] / om$F_true - 1
+tbase_f <- med_f["0.5", "FALSE", "FALSE", "0.05"] / om$F_true - 1
+```
 
 # How MULTIFAN-CL treats mixing returns {#sec-mechanics}
+
+The design has a defensible rationale. During mixing, tagged fish are by definition
+not distributed like the population, so a prediction of their recaptures from
+population-average availability is knowingly misspecified, and scoring returns
+against it would manufacture information rather than extract it. Declining to fit
+them is the same instinct as setting aside a series whose selectivity cannot be
+modelled. What makes the mixing period harder than that case is that the returns
+cannot simply be dropped: those fish have left the tagged population, and failing to
+remove them would inflate the cohort against which every later, legitimately fitted
+return is scored. The data must therefore be used even where they cannot be fitted.
 
 The issue is not that MULTIFAN-CL lacks a tag likelihood. **After mixing**, it projects
 the tagged population with the population fishing mortality, predicts reported returns
 as expected recaptures multiplied by the reporting rate, and scores those returns in the
 tag likelihood. **During mixing**, it instead uses observed returns to solve
 deterministically for a tag-specific removal that fixes the tagged population state.
-The mixing returns themselves contribute no likelihood term under either flag setting.
+The mixing returns are never scored as evidence about that state under either flag
+setting — although, as [the next subsection](#sec-mixing-terms) sets out, likelihood
+terms for them are still formed, with consequences that differ between the settings.
 
-| `tag_flags(i,2)` | Mixing-period removal target | Mixing returns scored in likelihood? | Principal failure mode |
-|---:|---|:---:|---|
-| 0 | $R_{obs} / X$ | No | Conditionally valid only if the assumed reporting rate is right, the survival floor is inactive, and the release-group inversion is informative. |
-| 1 | $R_{obs}$ | No | Assumes complete reporting and systematically under-removes wherever $X < 1$. |
+| `tag_flags(i,2)` | Mixing-period removal target | Mixing returns in the likelihood | Principal failure mode |
+|---:|---|---|---|
+| 0 | $R_{obs} / X$ | Present but inert: predicted reported returns reproduce the observations by construction | Conditionally valid only if the assumed reporting rate is right, the survival floor is inactive, and the release-group inversion is informative. |
+| 1 | $R_{obs}$ | Present and mis-scaled: predicts $X R_{obs}$ against $R_{obs}$ | Assumes complete reporting and systematically under-removes wherever $X < 1$; when rates are estimated, the mis-scaled terms act as pseudo-data for complete reporting ([details](#sec-mixing-terms)). |
 
 Here $R_{obs}$ is the reported return and $X$ is its reporting rate. The first setting
 raises observed returns for non-reporting before removal; the second treats reported
-returns as true recaptures. Neither treatment lets the model estimate a disagreement
-between predicted and observed mixing returns, attach uncertainty to them, or update
-parameters through a mixing-period likelihood. This is why choosing a flag is not a
-likelihood-based treatment of the data.
+returns as true recaptures. Neither treatment scores the mixing returns as evidence
+about the tagged-population state: the removal is solved to reproduce its target
+exactly, with no uncertainty attached and no ability for the model to object. This is
+why choosing a flag is not a likelihood-based treatment of the data.
+
+## What the likelihood terms contain {#sec-mixing-terms}
+
+SA-WP-06 §5.4.2 describes the treatment two ways: that mixing-period tags "do not
+contribute to the tagging likelihood component", and that the treatment "desensitizes
+the likelihood function". The second formulation is the accurate one. In the source
+(June 2025 public release, v2.2.7.6), the tag likelihood loops from the release period
+with no mixing-window offset — `fit_tag_returns` in `tagfit.cpp` iterates from
+`initial_tag_period(it,ir)` — so a likelihood term is formed and summed for every
+mixing-period return under both flag settings. What matters is what the terms contain,
+because the two settings differ here in a way the table above records.
+
+Under `tag_flags(i,2) = 0`, the Newton–Raphson removal drives the model's true
+recaptures onto $R_{obs}/X$, and the likelihood then predicts reported returns as $X$
+times those recaptures: the fishery-period totals reproduce the observations
+identically, the reporting rate cancels between removal target and prediction, and
+the terms are informationally inert up to the age allocation of a constrained total.
+Under `tag_flags(i,2) = 1`, the cancellation fails: the removal drives true recaptures
+onto $R_{obs}$, so the likelihood predicts $X R_{obs}$ against an observation of
+$R_{obs}$. That term is minimized at $X = 1$ regardless of the data, so wherever
+reporting is incomplete, each mixing return enters the objective as pseudo-data for
+complete reporting — with a live gradient on the reporting-rate parameters whenever
+those rates are estimated, as they are in this assessment. The code corroborates the
+mismatch: the fit-report writers apply a corrected reporting-rate multiplier during
+Newton–Raphson periods (`get_rep_rate_correction`, `tag3.cpp`), but the likelihood
+path does not.
+
+Two effects therefore need separating. The *removal* effect — how many tags are
+deleted — operates through the tagged-population state, exists with all reporting
+rates fixed, and is the subject of the companion simulation study and of everything
+above. The *term-content* effect exists only under `tag_flags(i,2) = 1` with estimated
+reporting rates, and pulls the fitted rates toward one against their tag-seeding
+priors. The companion study fixes the assumed rate throughout, which deactivates the
+term-content effect by construction — and deactivates it in MULTIFAN-CL under the same
+conditions, since with rates fixed the mis-scaled terms are constants in the remaining
+parameters — so its results are unaffected by this section. The
+[minimal check below](#sec-mixing-terms-check) verifies both halves of that statement
+by simulation at two reporting-rate prior widths, with the direction of the pull
+enforced by tripwires rather than
+asserted. In this file, `r fpc(mix_share)` of the reported recaptures sit inside the
+mixing windows, so under the configured setting that share of the data participates
+in reporting-rate estimation as pseudo-data rather than as evidence.
+
+The distinction that matters is between desensitizing the likelihood and
+desensitizing the model. The first is what the design intends and what the
+quoted rationale describes; the second is not achieved. Mixing returns retain
+full authority over the tagged population state — more authority than fitted data
+would carry, because a fitted observation can be outweighed by other information
+and a deterministic constraint cannot. Their influence is relocated from a channel
+with residuals and error propagation to one with neither, so the same returns are
+treated as too unreliable to inform parameters and reliable enough to fix the
+population state exactly. Determinism is also not the only way to honour the stated
+intent: inflating the variance of mixing-period predictions, or downweighting them,
+would reduce their leverage while preserving error propagation, whereas a
+deterministic solve places unbounded weight on the channel the rationale has just
+described as untrustworthy.
+
+Desensitization is therefore appropriate under three conditions: that the removal
+target is approximately right, that the affected share of the data is small enough
+for its unpropagated error to be immaterial, and that the treatment declines to
+extract information rather than injecting misinformation. For this file none of the
+three holds. The target depends on the reporting rates, which are the quantity in
+dispute; the affected share is `r fpc(mix_share)` of reported recaptures; and under
+the configured setting the terms do not merely abstain but argue for complete
+reporting. The survival floor, treated next, breaches the first condition in a
+further way, by silently departing from the removal target the flag specifies.
+
+A consequence for $\hat\psi$: the fitted rates used for raising were estimated under
+`tag_flags(i,2) = 1`. To whatever extent the term-content effect has moved them
+upward, raising by them understates $\hat\psi$, so the diagnostic in this note is
+conservative in the direction that favours the configured setting.
 
 ## Why `tag_flags(i,2) = 1` exists {#sec-floor}
 
@@ -564,10 +805,14 @@ contribution.
 
 **Two structural facts frame everything.** First, under the configured mixing windows,
 `r fnum(R_mix)` of the `r fnum(R_tot)` reported recaptures in `bet.tag` —
-**`r fpc(mix_share)` of the tagging data** — never enter the likelihood. Under either
-setting of `tag_flags(i,2)`, those returns fix the tagged population state
-deterministically, with full authority and no uncertainty attached, and contribute
-nothing to parameter estimation. Second, the removal that fixes that state depends
+**`r fpc(mix_share)` of the tagging data** — are never scored as evidence about the
+tagged population. Under either setting of `tag_flags(i,2)`, those returns fix the
+tagged population state deterministically, with full authority and no uncertainty
+attached. Their likelihood terms still exist but are constructed from the
+observations themselves: inert under the raised setting, mis-scaled under the
+configured face-value setting, where they act as pseudo-data for complete reporting
+whenever rates are estimated ([What the likelihood terms contain](#sec-mixing-terms)).
+Second, the removal that fixes that state depends
 entirely on what is assumed about reporting rates during mixing, and the model's own
 fitted `tag fish rep` matrix says those rates are far from uniform: near-complete
 (0.99) for the Japanese coastal fisheries that dominate JPTP returns, roughly one half
@@ -629,6 +874,17 @@ available settings.
 
 ## First-level guidance: resolve or replace the tagged formulation
 
+**The resolution follows from the same reasoning that motivated the current
+treatment.** If mixing returns cannot be fitted because recaptures cannot be
+predicted from an unmixed cohort, then estimating the departure from mixing removes
+the obstacle rather than working around it. A single parameter suffices in the
+proof of concept: a mixing-period availability multiplier $\varphi$ on the tagged
+cohort's fishing mortality, in place of the untestable assertion that tagged fish
+are as available as the population. The mixing assumption then becomes an estimate
+with a standard error that the returns can contradict, instead of a constraint
+imposed on them. This is a continuation of the original design intent, not a
+rejection of it.
+
 **The resolution is a mixing-period likelihood.** During mixing, MULTIFAN-CL should
 project the tagged cohort, predict reported returns as $X C$, score those returns against
 the observations, and estimate reporting rates against their tag-seeding priors. This
@@ -637,7 +893,11 @@ deterministic inversion. The companion simulation's `forward_X` treatment recove
 under reporting-rate misspecification that biases both flags, but it is not free: when
 release groups are small, estimating fishing mortality, mixing availability, and
 reporting rates together can be imprecise. This is a MULTIFAN-CL redevelopment and
-validation task, not a configuration change for the current assessment.
+validation task, not a configuration change for the current assessment — though a
+smaller one than it may appear: likelihood terms for the mixing returns
+[already exist in the code](#sec-mixing-terms), and what changes is the origin of
+their predictions, generated from the projected cohort rather than constructed from
+the observations.
 
 Formally, for release group $i$, period $t$, and fishery $f$, `forward_X` advances the
 tagged cohort $N_{it}$ using a mixing-period fishing mortality $F^T_{it}$ and natural
@@ -679,6 +939,11 @@ compared with `r round(w_by_prog["JPTP"], 3)` for JPTP. `r sum(hi)` groups with
 $\hat\psi \ge 0.3$ carry `r fpc(rec_hi, 0)` of all reported recaptures. The configured
 face-value treatment therefore imposes its known directional bias on a material share of
 the data, concentrated in programmes with purse-seine reporting rates near one half.
+It also carries the [second defect](#sec-mixing-terms): with reporting rates
+estimated, its mixing-period likelihood terms are pseudo-data for complete reporting,
+so the fitted rates that scale every post-mixing prediction are themselves in
+question under this setting; the natural check is a comparison of fitted rates
+against their tag-seeding priors between the two flag settings.
 It can remain a documented diagnostic sensitivity, but not an equally weighted grid level
 or a bounding endpoint.
 
@@ -963,6 +1228,63 @@ also do not bound the $F$ estimate: because `flag0` is always the higher flag tr
 when the assumed reporting rate is below one, the pair can sit entirely above or below
 the truth rather than enclosing it.
 
+## Estimated reporting rates and the mis-scaled terms {#sec-mixing-terms-check}
+
+This check activates the term-content effect of
+[What the likelihood terms contain](#sec-mixing-terms) in the same stripped-down
+operating model. Reporting rate is now estimated with a log-scale tag-seeding prior
+centred at $X = 0.5$, the flag removals run as before, and the mixing-period
+likelihood terms are formed exactly as MULTIFAN-CL forms them: predicted reported
+returns equal the estimated rate times the removal the flag actually made. Each
+condition is fitted twice on identical data, with the mixing terms included and
+excluded, so the difference isolates what those terms alone do. Because the outcome
+depends on how strongly the prior resists the mis-scaled terms, the whole design is
+run at two prior widths: the weak single-group prior used for `forward_X` above
+($\mathrm{sd} = 0.25$ on $\log X$) and a tight one ($\mathrm{sd} = 0.05$) standing
+in for the stronger reporting-rate information an assessment carries.
+
+Two deterministic checks precede the fits — the mixing-term block of the objective is
+invariant to the estimated rate under the raised removal, and strictly decreasing
+toward $X = 1$ under the face-value removal. The render then fails unless, in every
+condition and at both prior widths, the face-value fits with the terms included
+return a higher fitted rate and a lower fitted $F$ than the paired fits with them
+excluded; the raised fits are unchanged by the terms; and the tighter prior reduces
+the face-value inflation without removing it.
+
+```{r mixing-terms-check-table}
+#| echo: false
+estx_display <- estx_summary[order(estx_summary$`True X`, estx_summary$Removal,
+                                   estx_summary$`Mixing terms`), ]
+estx_display$`Median F bias` <- fpc(estx_display$`Median F bias`, 1)
+estx_display$Converged <- fpc(estx_display$Converged, 0)
+knitr::kable(estx_display, row.names = FALSE)
+```
+
+Under the raised removal the terms change nothing, at either prior width: fitted
+rates and $F$ agree whether the terms are included or excluded, which is the
+cancellation made executable and a control on the face-value result — same code,
+same data, one flag switch. Under the face-value removal the terms capture the
+estimate. With the weak prior, at a true rate of 0.5, the median fitted rate moves
+from `r round(base_x, 2)` with the terms excluded to `r round(pull_x, 2)` with them
+included, and the median $F$ error from `r fpc(base_f, 1)` to `r fpc(pull_f, 1)`;
+the fitted rate lands at nearly the same value whatever the true rate, which is the
+signature of an estimate that has stopped responding to the data that identifies it.
+Tightening the prior fivefold resists but does not remove the pull: the fitted rate
+then moves from `r round(tbase_x, 2)` to `r round(tpull_x, 2)`, and the $F$ error
+from `r fpc(tbase_f, 1)` to `r fpc(tpull_f, 1)`.
+
+The point is not that the reporting rate is inestimable — the excluded columns
+recover it. The point is that under the face-value setting the mixing terms compete
+with the seeding prior for control of a parameter that scales every post-mixing
+prediction, and their preferred value is complete reporting regardless of the data.
+These magnitudes are properties of the illustrative operating model — one release
+group, one fishery, Poisson reporting, and fishing mortality informed by tags alone
+rather than by catch and effort — not of the assessment, where more post-mixing
+returns and the full set of seeding priors push back harder. What transfers is the
+structure and the direction. The size of the effect in the assessment is an open,
+computable question: a `tag_flags(i,2)` comparison of fitted reporting rates against
+their tag-seeding priors.
+
 # Limitations
 
 1. **The transcribed settings are the load-bearing inputs.** `nmix` and the
@@ -981,8 +1303,10 @@ the truth rather than enclosing it.
    direction and existence of the flip as given by the assessment team; nothing here
    recomputes grid outputs.
 5. **$\hat\psi$ inherits the rates it is raised by**, in the direction that understates
-   the problem if reporting estimates fall further, and the zero-rate fishery-27
-   returns are excluded from raising.
+   the problem if reporting estimates fall further; the term-content effect of the
+   [mixing-period likelihood terms](#sec-mixing-terms) runs the same way, since rates
+   fitted under the configured setting are pushed upward by the mis-scaled terms.
+   The zero-rate fishery-27 returns are excluded from raising.
 6. **The fleets-as-areas result is cited, not reproduced.** The statement that its
   depletion and stock-status results are comparable to the current tagged model is
   reported from Appendix A1 of the 2026 bigeye full paper. This note does not reproduce
@@ -990,8 +1314,11 @@ the truth rather than enclosing it.
 7. **The embedded simulations are proof-of-concept checks.** They vary true reporting
   rate, mixing length, and relative tagged-fish availability, but remain intentionally
   smaller and simpler than the companion study. They do not quantify this assessment's
-  fitted $F$ bias or validate a MULTIFAN-CL implementation; their reporting-rate prior,
-  observation model, and single-group design are illustrative.
+  fitted $F$ bias or validate a MULTIFAN-CL implementation. The term-content check
+  sweeps the reporting-rate prior width rather than fixing it, so its direction does
+  not rest on a single choice of prior strength, but its observation model and
+  single-group design remain illustrative and its magnitudes are not assessment
+  predictions.
 
 # Appendix: per-group $\hat\psi$ {#sec-appendix}
 

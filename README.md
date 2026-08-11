@@ -7,7 +7,7 @@ This repository contains reproducible Quarto analyses of the treatment of mixing
 - [mixing-period-tags-summary.qmd](https://n-ducharmebarth-noaa.github.io/sc22-tag-analysis/mixing-period-tags-summary.html) is an executive summary examining what
   `tag_flags(i,2)` can and cannot do, using `bet.tag` and fitted reporting
   rates.
-- [mixing-period-tags-v10.qmd](https://n-ducharmebarth-noaa.github.io/sc22-tag-analysis/mixing-period-tags-v10.html) is a more in depth simulation investigation comparing
+- [mixing-period-tags-preliminary.qmd](https://n-ducharmebarth-noaa.github.io/sc22-tag-analysis/mixing-period-tags-preliminary.html) is an initial simulation investigation comparing
   `tag_flags(i,2)` settings with likelihood-based alternatives in MULTIFAN-CL.
 
 Rendered HTML versions of both reports are included in the repository. The analyses use input snapshots in `inputs/`, including `bet.tag`, `final.par`, and a cached source revision for reproducible rendering.
@@ -29,7 +29,7 @@ quarto render .\mixing-period-tags-v10.qmd
 - Sensitivity analyses covered off a number of important areas related to the treatment of the tagging data (tau, tag mixing cutoff, inclusion of reporting rates during the mixing period), and regional scaling.
 - Additionally, information papers produced by SPC investigated spatially implicit, fleets-as-areas models as well as the potential effect of spatially varying growth, both of which were identified in previous discussions as either critical areas of development or future research.
 
-**Net result:** Quite possibly the best assessment SPC has ever produced. The transparency and openness of the assessment development process has also allowed for a more thorough investigation of the stock assessment model than ever before, allowing the SC to truly fulfill its role as a scientific review body. Unfortunately, this resulted in the discovery of a fundamental flaw in how Multifan-CL deals with the tagging data, and a number of other issues with the stock assessment.
+**Net result:** Quite possibly the best assessment SPC has ever produced. The transparency and openness of the assessment development process has also allowed for a more thorough investigation of the stock assessment model than ever before, allowing the SC to truly fulfill its role as a scientific review body. Unfortunately, this resulted in the discovery of a significant problem with how Multifan-CL deals with the tagging data, and a number of other issues with the stock assessment.
 
 ### Areas for improvement
 
@@ -43,9 +43,17 @@ quarto render .\mixing-period-tags-v10.qmd
 
 #### Tier 1: Inclusion of tagging data in Multifan-CL
 
-Multifan-CL does not appropriately model tags within the mixing period, and analysts are forced to choose between two flawed options. Including a reporting rate adjustment within the mixing period may produce unbiased results under certain conditions but is a fragile option. The reporting rate must be correct, tag release groups must be large enough to be informative, and the correction must not result in too few tags surviving the mixing period. The alternative within Multifan-CL is to not adjust for the reporting rate during the mixing period, and implicitly assume that reporting rate is 1. This is a strong assumption, and one that is unlikely to be true given an inspection of the actual tag return data. Additionally, it has a known directional bias and will never remove more tags than the raised option. Whenever the reporting rate is below one and the raised removal is feasible, this produces lower estimates of F and larger estimates of population scale. In either case, both models deterministically allow the tags recaptured within the mixing period to impact the tagged population dynamics without being formally incorporated into the likelihood or contributing to parameter uncertainty; both of which have implications for the estimated population dynamics. This is inappropriate and in practice means a meaningful proportion of the tagging data silently impacts model results.
+Analysts are forced to choose between two flawed options for how to deal with mixing period tag recaptures when modeling tags in Multifan-CL.
 
-If tagging data is to be used in Multifan-CL, the software needs to be revised to add a dedicated mixing period tagging likelihood with the additional estimation of mixing-period F and availability. However, this revision would add additional complexity, and it remains to be seen if the additional parameters would be identifiable especially under the current reality of many small, noisy release groups.
+**Adjusting for the reporting rate** raises each reported return before the tags are removed. This can give an unbiased estimate of F, but only if three conditions hold: the reporting rate must be correct, release groups must be large enough to be informative, and the raised removal must not leave too few tags surviving the mixing period. The third condition is the fragile one. When it fails, Multifan-CL silently caps the removal and removes fewer tags than intended, so the correction becomes an under-correction at exactly the point it was needed. Nothing in the standard model output reports that this has happened.
+
+**Not adjusting for the reporting rate** removes returns at face value, which implicitly assumes that every recaptured tag is reported. Inspection of the tag file and the model's own fitted reporting rates indicates this is untrue for a large part of the tagging data. The consequence is a known directional bias: this option can never remove more tags than the raised option, so wherever reporting is incomplete it leaves too many tags in the population and produces lower estimates of F and larger estimates of population scale.
+
+Both options also share a deeper problem. The mixing-period recaptures fix the tagged population dynamics deterministically, with no uncertainty attached, and are never weighed against what the model predicts. Likelihood terms for these recaptures are still formed in the code, but their predictions are built from the observed returns rather than from the model: under the raised option the prediction reproduces the observation exactly, so the term carries no information; when not adjusting for the reporting rate the prediction is only a reporting-rate fraction of the observation, and the only way to close that gap is to conclude that reporting is complete. Therefore, the mixing returns also pull the estimated reporting rates upward, and those rates scale every prediction outside the mixing period. In practice, a substantial share of the tagging data silently influences model results without ever being tested against the model.
+
+It is worth being clear that this original treatment to desensitize the likelihood was a reasonable response to a genuine difficulty. Tagged fish are not mixed through the population during this period, so predicting their recaptures from population-average availability is knowingly wrong, and declining to fit those returns is defensible. However, unlike a data series that can simply be dropped, these fish have left the tagged population and still have to be removed from it. Removing them deterministically desensitizes the likelihood without desensitizing the model: it gives the returns complete authority over the tagged population, which is more influence than fitted data would carry, because a fitted observation can be outweighed by other information and a deterministic constraint cannot. The alternative is to model the process being worked around, by estimating how available tagged fish are while mixing, which allows the returns to be fitted and the tags to be removed with uncertainty propagated.
+
+If tagging data is to be used in Multifan-CL, the software should be revised so that the mixing period likelihood compares observed recaptures against returns predicted from the tagged cohort itself, with both the reporting rate and the availability of tagged fish during mixing estimated rather than assumed. This would address the issues identified with the two options for `tag_flags(i,2)`. However, this revision would add additional complexity, and it remains to be seen if the additional parameters would be identifiable especially under the current reality of many small, noisy release groups.
 
 #### Tier 2: Retaining the reporting rate correction (included v. excluded) axis within the uncertainty grid
 
@@ -59,16 +67,19 @@ Given the issues with the tagging data, there are two clear, and independent, pa
 
 #### 1. Modify Multifan-CL
 
-Multifan-CL must be modified to include an additional likelihood to appropriately deal with the tag recaptures during the mixing period, and allow for the estimation of mixing period F and availability (by tag group).
+Multifan-CL must be modified so that the mixing-period likelihood terms that already exist in the code score predictions generated from the projected tagged cohort, rather than predictions constructed from the observed returns themselves, with the additional estimation of mixing period F and availability (by tag group).
+
+This follows the original design reasoning rather than discarding it. If the obstacle to fitting mixing-period returns is that recaptures cannot be predicted from an unmixed cohort, then estimating the departure from mixing — in the proof of concept, an availability multiplier on the tagged cohort's fishing mortality — removes the obstacle instead of working around it, and converts the mixing assumption from an imposed constraint into an estimate the tag returns can contradict.
 
 **Pros**
 
-- Correctly integrates the tagging data into the model allowing for errorpropagation and mixing period assumptions to compete in the likelihood along with other model components.
+- Correctly integrates the tagging data into the model allowing for error propagation and mixing period assumptions to compete in the likelihood along with other model components.
 
 **Cons**
 
 - Adds complexity.
 - Additional parameters may be weakly identifiable given tag release groups tend to be small and noisy.
+- The resolution of the availability model matters. Simulation indicates that an availability multiplier too coarse to span the shape of the true departure from mixing reproduces that departure by inflating mixing-period mortality, which over-depletes the tagged cohort and biases F upward. Resolving availability within the mixing window removes the effect and leaves F where dropping the mixing returns entirely would leave it, which is what the current design intends. Sharing availability across release groups to stabilise estimation therefore trades identifiability for bias, and the two concerns need to be resolved together.
 
 #### 2. Include spatially implicit, fleets-as-areas models in the uncertainty grid
 

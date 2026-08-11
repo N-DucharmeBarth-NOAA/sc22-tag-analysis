@@ -87,11 +87,16 @@ observed returns rather than predicting them. `tag_flags(i,2)` selects the
 target: the default raises reported returns by the assumed reporting rate and
 removes that many tags; the alternative removes the reported returns at face
 value, which amounts to assuming complete reporting. Neither scores the
-mixing-period data in the likelihood, so under both settings those data fix the
-tagged population state with no uncertainty attached and no ability for the
-model to object. **Both treatments are wrong, and the choice cannot be avoided
-in any model that fits to tags.** This study simulates both, together with two
-likelihood-based alternatives, across reporting-rate misspecification,
+mixing-period data as evidence about the tagged population, so under both
+settings those data fix its state with no uncertainty attached and no ability
+for the model to object. Likelihood terms for those returns are still formed,
+but their predictions are constructed from the observations rather than from the
+tagged cohort: under the default the prediction reproduces the observation
+identically and the term carries no information, while under the alternative it
+reproduces only a reporting-rate fraction of it, a mismatch that is minimised at
+complete reporting. **Both treatments are wrong, and the choice cannot be
+avoided in any model that fits to tags.** This study simulates both, together
+with two likelihood-based alternatives, across reporting-rate misspecification,
 mixing-period length, tagged-fish availability during mixing, a realistic
 clumped reporting process, and release-group size.
 
@@ -145,17 +150,18 @@ likelihood, with the reporting rate free to move against its tag-seeding prior,
 puts those data on the same footing as post-mixing returns and inverts nothing.
 This study implements that treatment (`forward_X`) alongside the two flag
 settings, and it recovers $F$ under the reporting-rate misspecification that
-biases both of them. MULTIFAN-CL cannot currently do this: the mixing-period
-returns do not enter the tag likelihood under either flag setting, so it is a
-redevelopment request to the MULTIFAN-CL team rather than a configuration
-choice. It is also not free. With many small release groups it was the least
-precise of the four estimators tested here — estimating the reporting rate, the
-availability multiplier and $F$ together needs information a fragmented tagging
-programme may not carry. That
-finding comes with a caveat: the prior imposed on the reporting rate in these
-runs is far looser than the tag-seeding priors an assessment would use, so an
-unknown share of the imprecision belongs to the prior rather than to the
-estimator, and the comparison should be re-run before the finding is leaned on.
+biases both of them. MULTIFAN-CL cannot currently do this: under both flag
+settings the mixing-period predictions are built from the observed returns
+rather than from the tagged cohort, so nothing about that cohort is scored as
+evidence. It is therefore a redevelopment request to the MULTIFAN-CL team rather
+than a configuration choice. It is also not free. With many small release groups
+it was the least precise of the four estimators tested here — estimating the
+reporting rate, the availability multiplier and $F$ together needs information a
+fragmented tagging programme may not carry. That finding comes with a caveat:
+the prior imposed on the reporting rate in these runs is far looser than the
+tag-seeding priors an assessment would use, so an unknown share of the
+imprecision belongs to the prior rather than to the estimator, and the
+comparison should be re-run before the finding is leaned on.
 
 **In the meantime the most useful response is not to pick a setting but to
 bound how much the tag data are driving the answer at all.** We recommend that
@@ -202,9 +208,23 @@ observed returns. The flag `tag_flags(i,2)` chooses the target:
 | `tag_flags(i,2) = 0` (default) | $R_{obs} / X$ | reported returns raised for non-reporting |
 | `tag_flags(i,2) = 1` | $R_{obs}$ | reported returns taken at face value |
 
-Mixing-period returns contribute **nothing** to the likelihood under either
-setting. They have full authority over the tagged population state and zero
-influence on parameter estimation, with no uncertainty attached.
+Mixing-period returns are never scored as **evidence** about the tagged
+population under either setting: they have full authority over its state, with
+no uncertainty attached and no residual the model can respond to. Likelihood
+terms for them are nonetheless formed — `fit_tag_returns` in `tagfit.cpp` loops
+from `initial_tag_period` with no mixing-window offset — and what those terms
+contain differs between the settings. Under `tag_flags(i,2) = 0` the
+Newton-Raphson removal drives true recaptures onto $R_{obs}/X$ and the
+likelihood multiplies them back by $X$, so predictions reproduce the
+observations, the reporting rate cancels, and the terms are inert. Under
+`tag_flags(i,2) = 1` that cancellation fails: the likelihood predicts $X
+R_{obs}$ against $R_{obs}$, a term minimised at $X = 1$ regardless of the data,
+so where reporting rates are estimated the mixing returns act as pseudo-data for
+complete reporting. The experiments below hold the assumed reporting rate fixed
+throughout, which deactivates that second channel — in the simulator and in
+MULTIFAN-CL alike, since with $X$ fixed the mis-scaled terms are constants in
+the remaining parameters — so the results that follow isolate the removal
+channel.
 
 This vignette runs five experiments.
 
@@ -443,7 +463,7 @@ All estimate $F$ on the log scale. They differ only in how the mixing periods ar
 handled. Every one uses `X_assumed = 0.5`; none is told the true reporting rate,
 and none is told $\varphi$.
 
-| Label | Mixing-period removal | Mixing returns in likelihood? | Free parameters |
+| Label | Mixing-period removal | Mixing returns scored as evidence? | Free parameters |
 |---|---|---|---|
 | `flag0` | $R_t / X_{assumed}$, solved deterministically | no | $\log F$ |
 | `flag1` | $R_t$, solved deterministically | no | $\log F$ |
@@ -2989,12 +3009,13 @@ that uncertainty should be represented directly.
 The treatment that would resolve the dilemma rather than manage it is to predict
 mixing-period returns and score them in the likelihood, with the reporting rate
 estimated against its tag-seeding prior. MULTIFAN-CL cannot currently do this —
-mixing-period returns do not enter the tag likelihood under either setting — so
-it is a request to the MULTIFAN-CL development team rather than something an
-assessment can configure. We recommend it as a medium-term change, with the
-caveat that the simulation here also shows it is not free: with many small
-release groups it was the least precise of the four estimators tested, under a
-prior looser than any assessment would impose.
+under both settings the mixing-period predictions are constructed from the
+observed returns rather than from the tagged cohort, so nothing is scored as
+evidence about that cohort — and it is therefore a request to the MULTIFAN-CL
+development team rather than something an assessment can configure. We recommend
+it as a medium-term change, with the caveat that the simulation here also shows
+it is not free: with many small release groups it was the least precise of the
+four estimators tested, under a prior looser than any assessment would impose.
 
 Because both settings are biased and the choice is unavoidable in any model
 fitted to tags, we further recommend that a configuration omitting tagging data —
