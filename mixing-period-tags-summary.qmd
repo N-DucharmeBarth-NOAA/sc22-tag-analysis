@@ -98,7 +98,7 @@ the two quantities that govern the problem — the share of recapture data resol
 deterministically inside the mixing windows rather than scored as evidence, and the
 mixing-period recapture fraction $\hat\psi$ raised by the fitted
 fishery-specific reporting rates — and reads them against a companion simulation study
-(*Mixing-period tag recaptures in MULTIFAN-CL*, v10) whose results are quoted with
+(*Mixing-period tag recaptures in MULTIFAN-CL*, preliminary) whose results are quoted with
 provenance, not re-derived.
 
 Everything computed here is parsed inline from the `.tag` and fitted `.par` inputs;
@@ -801,6 +801,59 @@ absent. The current rates were fitted under flag 1 and would re-equilibrate unde
 an actual flag-0 fit must identify any floor engagements and their objective-function
 contribution.
 
+::: {.callout-warning}
+## Which Newton-Raphson routine the build calls
+
+`tag3.cpp` contains more than one definition of the tag Newton-Raphson solve, and
+they differ on exactly the two features this section relies on. The routine
+described above branches on `tag_flags(i,2)` and applies the survival floor. A
+second definition, `do_newton_raphson_for_tags2`, forms `actual_tag_catch` as
+`tot_tag_catch/(1e-6 + rep_rate)` with no `tag_flags(i,2)` test — it raises
+unconditionally — and although it computes `surv_rate`, it never uses it, so no
+floor is applied. A third definition sits inside a comment block and is dead. **We
+have not confirmed which routine the assessment build compiles and calls.**
+
+The assessment's own reported results settle part of this. The flag is a level of
+the uncertainty grid, and the grid outputs reported above differ by level: the
+status determination changes when the ensemble is restricted to
+`tag_flags(i,2) = 0`. A build routed solely through `do_newton_raphson_for_tags2`
+would ignore the flag, both levels would return the same fit, and no such
+difference could arise. The flag also has no effect on estimation outside the
+Newton-Raphson removal — its only other appearance is in the fit-report writers —
+so the routine the assessment estimates with is one that branches on it.
+Consistent with this, the flag was inert in MULTIFAN-CL before v2.2.7.6, which is
+the behaviour of a build that formerly routed through a flag-blind routine. What
+is not settled is whether the live routine also carries the survival floor.
+
+The uncertainty is therefore bounded by this section. Were the live routine to lack
+the floor, the rationale set out above for preferring flag 1 would not arise, the
+group screen would not apply, and condition 1 of the guidance below would be
+satisfied vacuously. Everything else stands: flag 1 still under-removes wherever
+$X < 1$, flag 0 remains conditional on the assumed reporting rate and on
+release-group size, the two settings still fail to bracket the truth, and the
+mixing returns are still not scored as evidence about the tagged population
+([What the likelihood terms contain](#sec-mixing-terms)). In that case the argument
+against flag 0 is weaker and the argument against flag 1 unchanged, so the
+direction of the guidance is unaffected. A flag-0 fit reporting its floor
+engagements and `posfun` contribution would resolve the question empirically, which
+is a further reason for condition 1.
+:::
+
+::: {.callout-note}
+## Weight on the floor penalty
+
+When the floor engages, the `posfun` penalty enters the objective as
+`penwt * tmp`, with `penwt = 1.0` unless `age_flags(117)` is set: positive gives
+`age_flags(117)/1e8`, which is effectively zero, and negative gives zero outright.
+`age_flags(117)` is 0 in the diagnostic model, so the default weight applies. The
+minimal simulations below charge the penalty at 1000 times the `posfun` return,
+which makes flooring markedly harder to accept there than in MULTIFAN-CL. The
+difference is conservative for the argument — the model tolerates flooring more
+readily than these results imply — but it also means the objective-function
+contribution asked for in condition 1 will be small enough to overlook unless it is
+reported deliberately.
+:::
+
 # Summary {#sec-summary}
 
 **Two structural facts frame everything.** First, under the configured mixing windows,
@@ -1319,6 +1372,13 @@ their tag-seeding priors.
   not rest on a single choice of prior strength, but its observation model and
   single-group design remain illustrative and its magnitudes are not assessment
   predictions.
+8. **The Newton-Raphson routine the assessment build calls has not been confirmed.**
+  `tag3.cpp` defines more than one, and they differ in whether they branch on
+  `tag_flags(i,2)` and whether they apply the survival floor. The reported flag
+  sensitivities establish that a flag-honouring routine is live; whether it also
+  carries the floor is unresolved. The scope of that uncertainty is set out in
+  [Why `tag_flags(i,2) = 1` exists](#sec-floor) and is confined to the
+  floor-dependent material.
 
 # Appendix: per-group $\hat\psi$ {#sec-appendix}
 
